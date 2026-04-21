@@ -76,6 +76,21 @@ function validateProfile(profileDir: string) {
   if (!fs.existsSync(src)) {
     throw new Error(`Edge profile "${profileDir}" not found at ${src}`);
   }
+
+  // Check if Edge is using this profile (lock file present = profile in use)
+  const lockFile = path.join(src, 'lockfile');
+  const parentLock = path.join(EDGE_USER_DATA, 'lockfile');
+  if (fs.existsSync(lockFile) || fs.existsSync(parentLock)) {
+    console.error('\n  ╔══════════════════════════════════════════════════════════╗');
+    console.error('  ║  ERROR: Edge is currently running with this profile!    ║');
+    console.error('  ╠══════════════════════════════════════════════════════════╣');
+    console.error(`  ║  Profile: ${profileDir.padEnd(46)}║`);
+    console.error('  ║                                                          ║');
+    console.error('  ║  Please close ALL Edge windows using this profile,       ║');
+    console.error('  ║  then run the test again.                                ║');
+    console.error('  ╚══════════════════════════════════════════════════════════╝\n');
+    process.exit(1);
+  }
 }
 
 // ---------- main ----------
@@ -142,7 +157,8 @@ async function globalSetup() {
     console.log('→ Profile  : none (using auth-state.json fallback)');
   }
 
-  console.log('');
+  console.log('\n  ⏳ Starting tests — Edge will open shortly. This may take');
+  console.log('     30–60 seconds to spin up, please be patient...\n');
 }
 
 export default globalSetup;
