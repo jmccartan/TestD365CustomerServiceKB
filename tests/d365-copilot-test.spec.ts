@@ -20,7 +20,9 @@ const RESPONSE_TIMEOUT = parseInt(process.env.COPILOT_RESPONSE_TIMEOUT || '60', 
 const SIMILARITY_THRESHOLD = parseFloat(process.env.SIMILARITY_THRESHOLD || '0.6');
 
 const INPUT_XLSX = path.resolve(__dirname, '..', 'Prompts and Responses.xlsx');
-const OUTPUT_XLSX = path.resolve(__dirname, '..', `Test Results ${new Date().toISOString().slice(0, 10)}.xlsx`);
+const now = new Date();
+const timestamp = `${now.toISOString().slice(0, 10)}_${now.toTimeString().slice(0, 8).replace(/:/g, '-')}`;
+const OUTPUT_XLSX = path.resolve(__dirname, '..', `Test Results ${timestamp}.xlsx`);
 
 // ============================================================
 // HELPERS
