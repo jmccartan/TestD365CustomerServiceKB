@@ -330,6 +330,68 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
 }
 
 // ============================================================
+// POPUP DISMISSAL
+// ============================================================
+
+async function dismissPopups(page: Page) {
+  // Handle browser-level dialogs (permissions, alerts)
+  page.on('dialog', async (dialog) => {
+    console.log(`  Dismissing dialog: ${dialog.message().slice(0, 60)}`);
+    await dialog.dismiss();
+  });
+
+  // Dismiss known D365/Copilot popups by clicking close/dismiss buttons
+  const dismissSelectors = [
+    // Microphone permission popups
+    'button[aria-label*="Block"]',
+    'button[aria-label*="Deny"]',
+    'button[aria-label*="Don\'t allow"]',
+    // "A copilot for you" and similar onboarding popups
+    'button[aria-label*="Close"]',
+    'button[aria-label*="Dismiss"]',
+    'button[aria-label*="Got it"]',
+    'button[aria-label*="Skip"]',
+    'button:has-text("Got it")',
+    'button:has-text("Skip")',
+    'button:has-text("Close")',
+    'button:has-text("Dismiss")',
+    'button:has-text("No thanks")',
+    'button:has-text("Maybe later")',
+    // Generic close buttons on overlays/modals
+    '[class*="dismiss"] button',
+    '[class*="modal"] button[class*="close"]',
+    '[role="dialog"] button[aria-label*="Close"]',
+    '[role="dialog"] button[aria-label*="Dismiss"]',
+  ];
+
+  for (const sel of dismissSelectors) {
+    try {
+      const btn = page.locator(sel).first();
+      if (await btn.isVisible({ timeout: 500 }).catch(() => false)) {
+        const text = await btn.innerText().catch(() => sel);
+        console.log(`  Dismissing popup: ${text.trim().slice(0, 40) || sel}`);
+        await btn.click();
+        await page.waitForTimeout(500);
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Also check inside iframes for popups
+  for (const frame of page.frames()) {
+    for (const sel of ['button:has-text("Got it")', 'button:has-text("Close")', 'button:has-text("Dismiss")']) {
+      try {
+        const btn = frame.locator(sel).first();
+        if (await btn.isVisible({ timeout: 300 }).catch(() => false)) {
+          console.log(`  Dismissing popup in frame: ${sel}`);
+          await btn.click();
+          await page.waitForTimeout(500);
+        }
+      } catch { /* ignore */ }
+    }
+  }
+}
+
+// ============================================================
 // TEST
 // ============================================================
 
@@ -392,9 +454,15 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
   await openCopilotPanel(page);
   await page.waitForTimeout(3000);
 
+  // Dismiss any popups (microphone permission, "A copilot for you", etc.)
+  await dismissPopups(page);
+
   const results: TestResult[] = [];
 
   for (let i = 0; i < prompts.length; i++) {
+    // Dismiss popups that may appear between prompts
+    await dismissPopups(page);
+
     const { prompt, expectedResponse, referencedDocs } = prompts[i];
     console.log(`[${i + 1}/${prompts.length}] Sending: ${prompt.slice(0, 80)}...`);
 
