@@ -113,7 +113,9 @@ async function globalSetup() {
       ? `${profiles[savedIndex].displayName} (${profiles[savedIndex].directory})`
       : 'none';
 
-    console.log(`\n  Edge profiles found:`);
+    console.log(`\n  ⚠  Close any Edge windows using the selected profile before continuing.`);
+    console.log(`     The test cannot use a profile that is currently open in Edge.\n`);
+    console.log(`  Edge profiles found:`);
     profiles.forEach((p, i) => {
       const marker = p.directory === saved.edgeProfile ? ' ◄ current' : '';
       console.log(`  [${i + 1}]  ${p.displayName}  (${p.directory})${marker}`);
