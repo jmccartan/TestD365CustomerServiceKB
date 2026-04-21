@@ -59,10 +59,9 @@ async function globalSetup() {
   const saved = loadSettings();
 
   // ── 0. Check Chromium is installed ───────────────────────
-  const { execSync } = require('child_process');
-  try {
-    execSync('npx playwright browser-versions chromium', { stdio: 'pipe' });
-  } catch {
+  const { chromium: pw } = require('@playwright/test');
+  const chromiumPath: string = pw.executablePath();
+  if (!fs.existsSync(chromiumPath)) {
     console.error('');
     console.error('  ┌──────────────────────────────────────────────────────┐');
     console.error('  │  Chromium is not installed!                          │');
