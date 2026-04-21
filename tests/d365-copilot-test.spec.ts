@@ -252,14 +252,32 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
   console.log('  │                                                      │');
   console.log('  │  1. Navigate to the Customer Service workspace       │');
   console.log('  │  2. Make sure the Copilot side panel is open         │');
-  console.log('  │  3. Click the green RESUME button in the browser     │');
-  console.log('  │     (Playwright toolbar at top of page)              │');
+  console.log('  │  3. Click the START TESTS button in the browser      │');
   console.log('  │                                                      │');
   console.log('  │  The URL will be saved automatically for next run.   │');
   console.log('  └──────────────────────────────────────────────────────┘');
   console.log('');
 
-  await page.pause();
+  // Inject a floating "Start Tests" button and wait for the user to click it
+  await page.evaluate(() => {
+    const btn = document.createElement('button');
+    btn.id = 'pw-start-tests';
+    btn.textContent = '▶  START TESTS';
+    btn.style.cssText = `
+      position: fixed; top: 10px; right: 10px; z-index: 999999;
+      padding: 16px 32px; font-size: 18px; font-weight: bold;
+      background: #107c10; color: white; border: none; border-radius: 8px;
+      cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    `;
+    btn.onmouseover = () => btn.style.background = '#0b5e0b';
+    btn.onmouseout = () => btn.style.background = '#107c10';
+    btn.onclick = () => btn.remove();
+    document.body.appendChild(btn);
+  });
+
+  // Wait until the button is clicked (removed from DOM)
+  await page.waitForSelector('#pw-start-tests', { state: 'detached', timeout: 600_000 });
+  console.log('  ✅ Starting tests...\n');
 
   // Capture the current URL from the browser and save it for next run
   const currentUrl = page.url();
