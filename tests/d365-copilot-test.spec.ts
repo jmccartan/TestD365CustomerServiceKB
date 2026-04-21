@@ -144,16 +144,27 @@ async function findCopilotInput(page: Page): Promise<{
   frame: Page | import('@playwright/test').Frame;
   input: ReturnType<Page['locator']>;
 }> {
+  // Ordered from most specific to least specific
   const inputSelectors = [
-    'textarea[data-id*="copilot"]',
+    // D365 Copilot specific
+    'div[class*="CopilotRoot"] textarea',
+    'textarea[aria-label="Type your message"]',
     'textarea[aria-label*="Type your message"]',
     'textarea[aria-label*="Ask a question"]',
     'textarea[aria-label*="Ask Copilot"]',
-    'textarea[placeholder*="Ask"]',
-    'textarea[placeholder*="Type"]',
+    'textarea[data-id*="copilot"]',
+    // Webchat / OmniChannel
     '[data-id="webchat-sendbox-input"]',
     'textarea[data-id="webchat-sendbox-input"]',
     'input[data-id="webchat-sendbox-input"]',
+    // Broader matches
+    'textarea[placeholder*="Ask"]',
+    'textarea[placeholder*="Type"]',
+    'textarea[placeholder*="message"]',
+    'textarea[role="textbox"]',
+    'div[contenteditable="true"][aria-label*="message"]',
+    'div[contenteditable="true"][aria-label*="Message"]',
+    'div[contenteditable="true"][data-id*="copilot"]',
   ];
 
   // Search the main page and every iframe for a matching input
@@ -172,11 +183,12 @@ async function findCopilotInput(page: Page): Promise<{
     }
   }
 
-  // Last resort: find any visible textarea in any frame
+  // Last resort: find any visible textarea or contenteditable in any frame
   for (const frame of framesToCheck) {
     try {
-      const count = await frame.locator('textarea').count();
-      for (let i = 0; i < count; i++) {
+      // Check textareas
+      const taCount = await frame.locator('textarea').count();
+      for (let i = 0; i < taCount; i++) {
         const ta = frame.locator('textarea').nth(i);
         if (await ta.isVisible({ timeout: 500 }).catch(() => false)) {
           const frameUrl = 'url' in frame ? (frame as any).url() : page.url();
@@ -184,19 +196,54 @@ async function findCopilotInput(page: Page): Promise<{
           return { frame, input: ta };
         }
       }
+      // Check contenteditable divs (some chat UIs use these instead of textarea)
+      const ceCount = await frame.locator('div[contenteditable="true"]').count();
+      for (let i = 0; i < ceCount; i++) {
+        const ce = frame.locator('div[contenteditable="true"]').nth(i);
+        if (await ce.isVisible({ timeout: 500 }).catch(() => false)) {
+          const frameUrl = 'url' in frame ? (frame as any).url() : page.url();
+          console.log(`  Found contenteditable div in frame: ${String(frameUrl).slice(0, 80)}`);
+          return { frame, input: ce };
+        }
+      }
     } catch { /* skip */ }
   }
 
-  // Dump debug info
+  // Dump comprehensive debug info to help identify the correct element
   console.error('\n  ── SELECTOR DEBUG INFO ──');
   console.error(`  Page URL: ${page.url()}`);
-  console.error(`  Frames (${page.frames().length}):`);
+  console.error(`  Total frames: ${page.frames().length}`);
   for (const f of page.frames()) {
     const url = f.url();
+    if (url.includes('blank.htm')) continue; // skip placeholder frames
     const taCount = await f.locator('textarea').count().catch(() => 0);
-    const inputCount = await f.locator('input[type="text"]').count().catch(() => 0);
-    if (taCount > 0 || inputCount > 0) {
-      console.error(`    - ${url.slice(0, 100)} [${taCount} textareas, ${inputCount} inputs]`);
+    const inputCount = await f.locator('input').count().catch(() => 0);
+    const ceCount = await f.locator('div[contenteditable="true"]').count().catch(() => 0);
+    console.error(`\n  Frame: ${url.slice(0, 100)}`);
+    console.error(`    textareas: ${taCount}, inputs: ${inputCount}, contenteditable: ${ceCount}`);
+    if (taCount > 0) {
+      const taInfo = await f.locator('textarea').evaluateAll((els) =>
+        els.map((el) => ({
+          visible: el.offsetParent !== null,
+          id: el.id || '(none)',
+          ariaLabel: el.getAttribute('aria-label') || '(none)',
+          placeholder: el.getAttribute('placeholder') || '(none)',
+          dataId: el.getAttribute('data-id') || '(none)',
+        }))
+      ).catch(() => []);
+      console.error('    textareas:', JSON.stringify(taInfo));
+    }
+    if (ceCount > 0) {
+      const ceInfo = await f.locator('div[contenteditable="true"]').evaluateAll((els) =>
+        els.map((el) => ({
+          visible: el.offsetParent !== null,
+          id: el.id || '(none)',
+          ariaLabel: el.getAttribute('aria-label') || '(none)',
+          dataId: el.getAttribute('data-id') || '(none)',
+          classes: el.className.slice(0, 80),
+        }))
+      ).catch(() => []);
+      console.error('    contenteditable:', JSON.stringify(ceInfo));
     }
   }
   console.error('  ── END DEBUG INFO ──\n');
@@ -231,23 +278,32 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
 
   // Count existing messages before sending
   const messageContainerSelectors = [
+    'div[class*="CopilotResponse"]',
     '[data-content="message-body"]',
     '.webchat__bubble__content',
     '[class*="message-content"]',
     '.ac-textBlock',
     '[role="listitem"]',
     '[role="log"] [role="group"]',
+    // Fallback: any div that looks like a chat message
+    '[class*="chat-message"]',
+    '[class*="bot-message"]',
   ];
 
-  let messageSelector = messageContainerSelectors[0];
+  let messageSelector = '';
   for (const sel of messageContainerSelectors) {
-    if (await frame.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
+    const count = await frame.locator(sel).count().catch(() => 0);
+    if (count > 0) {
       messageSelector = sel;
+      console.log(`  Using message selector: ${sel} (${count} existing)`);
       break;
     }
   }
 
-  const existingCount = await frame.locator(messageSelector).count();
+  // If no message selector found, we'll just wait by time
+  const existingCount = messageSelector
+    ? await frame.locator(messageSelector).count()
+    : 0;
 
   // Type and send the prompt
   await input.click();
@@ -255,27 +311,35 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
   await page.keyboard.press('Enter');
 
   // Wait for a new bot response to appear
-  await frame.waitForFunction(
-    ({ selector, prevCount }) => {
-      const msgs = document.querySelectorAll(selector);
-      return msgs.length > prevCount + 1;
-    },
-    { selector: messageSelector, prevCount: existingCount },
-    { timeout: RESPONSE_TIMEOUT }
-  );
+  if (messageSelector) {
+    await frame.waitForFunction(
+      ({ selector, prevCount }) => {
+        const msgs = document.querySelectorAll(selector);
+        return msgs.length > prevCount + 1;
+      },
+      { selector: messageSelector, prevCount: existingCount },
+      { timeout: RESPONSE_TIMEOUT }
+    );
+  } else {
+    // No message selector found — just wait a fixed time
+    console.log('  No message selector found — waiting for response by time...');
+    await page.waitForTimeout(RESPONSE_TIMEOUT / 2);
+  }
 
   // Wait for the response to finish streaming — keep checking until the
   // last message text stabilizes (no changes for 3 seconds)
-  let lastText = '';
-  let stableCount = 0;
-  while (stableCount < 3) {
-    await page.waitForTimeout(1000);
-    const currentText = await frame.locator(messageSelector).last().innerText().catch(() => '');
-    if (currentText === lastText && currentText.length > 0) {
-      stableCount++;
-    } else {
-      stableCount = 0;
-      lastText = currentText;
+  if (messageSelector) {
+    let lastText = '';
+    let stableCount = 0;
+    while (stableCount < 3) {
+      await page.waitForTimeout(1000);
+      const currentText = await frame.locator(messageSelector).last().innerText().catch(() => '');
+      if (currentText === lastText && currentText.length > 0) {
+        stableCount++;
+      } else {
+        stableCount = 0;
+        lastText = currentText;
+      }
     }
   }
 
@@ -295,11 +359,27 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
   }
 
   // Grab the last bot message
-  const messages = frame.locator(messageSelector);
-  const lastMessage = messages.last();
-  const responseText = await lastMessage.innerText();
+  if (messageSelector) {
+    const messages = frame.locator(messageSelector);
+    const lastMessage = messages.last();
+    const responseText = await lastMessage.innerText();
+    return responseText.trim();
+  }
 
-  return responseText.trim();
+  // Fallback: try to get the last visible text block in the Copilot area
+  const fallbackSelectors = [
+    'div[class*="CopilotResponse"]',
+    'div[class*="CopilotRoot"] div[class*="message"]',
+    '[role="log"]',
+  ];
+  for (const sel of fallbackSelectors) {
+    const el = frame.locator(sel).last();
+    if (await el.isVisible({ timeout: 1000 }).catch(() => false)) {
+      return (await el.innerText()).trim();
+    }
+  }
+
+  return 'ERROR: Could not capture response — message selector not found.';
 }
 
 // ============================================================
