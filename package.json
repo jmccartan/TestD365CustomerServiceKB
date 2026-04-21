@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "npx playwright test",
+    "test:parallel": "npx playwright test --config=playwright-parallel.config.ts"
   },
   "keywords": [],
   "author": "",
