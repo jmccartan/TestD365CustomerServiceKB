@@ -279,6 +279,10 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
   while (currentText === textBefore && Date.now() < responseDeadline) {
     await page.waitForTimeout(1000);
     currentText = await container.innerText().catch(() => '');
+    // Break early if chat limit was hit
+    if (currentText.includes('clear the chat') || currentText.includes('Clear chat')) {
+      return 'CHAT_LIMIT_REACHED';
+    }
   }
 
   if (currentText === textBefore) {
@@ -317,6 +321,41 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
   }
 
   return fullText.trim();
+}
+
+/**
+ * Detect and handle the D365 Copilot "15 of 15" conversation limit.
+ * When the limit is hit, a "Clear chat" link appears. Click it to
+ * reset the conversation so testing can continue.
+ * Returns true if the chat was cleared.
+ */
+async function clearChatIfNeeded(page: Page): Promise<boolean> {
+  const container = page.locator(COPILOT_CONTAINER_SEL);
+  const containerText = await container.innerText().catch(() => '');
+
+  if (!containerText.includes('clear the chat') && !containerText.includes('Clear chat')) {
+    return false;
+  }
+
+  console.log('  ⚠ Chat limit reached — clearing conversation...');
+
+  // Click the "Clear chat" link (it's an <a> or <button> with that text)
+  const clearLink = container.locator('a:has-text("Clear chat"), button:has-text("Clear chat")').first();
+  if (await clearLink.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await clearLink.click();
+    await page.waitForTimeout(3000);
+
+    // Wait for the textbox to reappear (panel resets)
+    await page.locator(`${COPILOT_CONTAINER_SEL} [role="textbox"]`)
+      .waitFor({ state: 'visible', timeout: 15_000 })
+      .catch(() => {});
+
+    console.log('  ✓ Chat cleared — continuing tests');
+    return true;
+  }
+
+  console.warn('  Could not find Clear chat link');
+  return false;
 }
 
 // ============================================================
@@ -496,6 +535,9 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
     // Dismiss popups that may appear between prompts
     await dismissPopups(page);
 
+    // Clear the conversation if the 15-message limit was reached
+    await clearChatIfNeeded(page);
+
     const { prompt, expectedResponse, referencedDocs } = prompts[i];
     console.log(`[${i + 1}/${prompts.length}] Sending: ${prompt.slice(0, 80)}...`);
 
@@ -505,6 +547,13 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
 
     try {
       actualResponse = await sendPromptAndGetResponse(page, prompt);
+
+      // If we hit the chat limit, clear and retry this prompt
+      if (actualResponse === 'CHAT_LIMIT_REACHED') {
+        await clearChatIfNeeded(page);
+        actualResponse = await sendPromptAndGetResponse(page, prompt);
+      }
+
       sim = similarity(expectedResponse, actualResponse);
       pass = sim >= SIMILARITY_THRESHOLD;
       console.log(`  → Similarity: ${(sim * 100).toFixed(1)}% — ${pass ? 'PASS' : 'FAIL'}`);
