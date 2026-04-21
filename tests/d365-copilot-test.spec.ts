@@ -328,7 +328,9 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
 
 /**
  * Expand the last "Check sources" accordion in the Copilot panel and
- * return the cited source names as a comma-separated string.
+ * return the cited sources. If KB sources are cited, returns their names
+ * comma-separated. If no KB sources, returns the disclaimer text
+ * (e.g. "This response didn't come from your knowledge sources...").
  */
 async function extractCitedSources(page: Page): Promise<string> {
   const container = page.locator(COPILOT_CONTAINER_SEL);
@@ -341,28 +343,42 @@ async function extractCitedSources(page: Page): Promise<string> {
   if (count === 0) return '';
 
   const lastBtn = accordionBtns.last();
-  const isExpanded = await lastBtn.getAttribute('aria-expanded').catch(() => 'false');
-  if (isExpanded !== 'true') {
+  const wasExpanded = (await lastBtn.getAttribute('aria-expanded').catch(() => 'false')) === 'true';
+  if (!wasExpanded) {
     await lastBtn.click();
     await page.waitForTimeout(1500);
   }
 
-  // Grab citation links (aria-label="Citation N Title")
+  let result = '';
+
+  // Check for citation links first (aria-label="Citation N Title")
   const citations = container.locator('a[aria-label^="Citation"]');
   const citCount = await citations.count().catch(() => 0);
-  const sources: string[] = [];
-  for (let i = 0; i < citCount; i++) {
-    const text = await citations.nth(i).innerText().catch(() => '');
-    if (text.trim()) sources.push(text.trim());
+
+  if (citCount > 0) {
+    const sources: string[] = [];
+    for (let i = 0; i < citCount; i++) {
+      const text = await citations.nth(i).innerText().catch(() => '');
+      if (text.trim()) sources.push(text.trim());
+    }
+    result = sources.join(', ');
+  } else {
+    // No citation links — grab the text from the expanded accordion panel.
+    // The AccordionItem panel sits next to the header; grab the panel content.
+    const accordionItem = container.locator('.fui-AccordionItem').last();
+    const panelText = await accordionItem.innerText().catch(() => '');
+    // Remove the "Check sources" header text itself
+    const cleaned = panelText.replace(/Check sources/i, '').trim();
+    if (cleaned) result = cleaned;
   }
 
   // Collapse it again to keep the panel tidy for the next prompt
-  if (isExpanded !== 'true') {
+  if (!wasExpanded) {
     await lastBtn.click().catch(() => {});
     await page.waitForTimeout(500);
   }
 
-  return sources.join(', ');
+  return result;
 }
 
 /**
