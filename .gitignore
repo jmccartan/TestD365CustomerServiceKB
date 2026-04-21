@@ -3,7 +3,7 @@ node_modules/
 
 # Auth state (contains session tokens)
 auth-state.json
-.edge-profile-choice
+.test-settings.json
 
 # Environment config (contains org-specific URLs)
 .env

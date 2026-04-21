@@ -1,21 +1,30 @@
 import { defineConfig } from '@playwright/test';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import 'dotenv/config';
 
-// ---- Read the profile choice written by global-setup ------
-const CHOICE_FILE = path.resolve(__dirname, '.edge-profile-choice');
-let edgeConfig: { profile: string; userDataDir: string } | null = null;
+// ---- Read saved settings written by global-setup ----------
+const SETTINGS_FILE = path.resolve(__dirname, '.test-settings.json');
+const EDGE_PROFILE_COPY = path.join(os.tmpdir(), 'pw-edge-profile');
 
-if (fs.existsSync(CHOICE_FILE)) {
-  try {
-    edgeConfig = JSON.parse(fs.readFileSync(CHOICE_FILE, 'utf-8'));
-  } catch {
-    // ignore — will fall back to storageState
-  }
+interface SavedSettings {
+  d365Url: string;
+  edgeProfile: string;
 }
 
-const useEdgeProfile = edgeConfig !== null;
+let settings: SavedSettings = {
+  d365Url: process.env.D365_URL || 'https://REPLACE_WITH_YOUR_ORG.crm.dynamics.com',
+  edgeProfile: '',
+};
+
+if (fs.existsSync(SETTINGS_FILE)) {
+  try {
+    settings = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8'));
+  } catch { /* use defaults */ }
+}
+
+const useEdgeProfile = settings.edgeProfile.length > 0;
 
 export default defineConfig({
   globalSetup: require.resolve('./global-setup'),
@@ -26,7 +35,7 @@ export default defineConfig({
   retries: 0,
   workers: 1, // sequential — one browser session against D365
   use: {
-    baseURL: process.env.D365_URL || 'https://REPLACE_WITH_YOUR_ORG.crm.dynamics.com',
+    baseURL: settings.d365Url,
 
     // Auth: Edge profile takes priority; storageState is fallback
     ...(useEdgeProfile
@@ -34,8 +43,8 @@ export default defineConfig({
           channel: 'msedge',
           launchOptions: {
             args: [
-              `--user-data-dir=${edgeConfig!.userDataDir}`,
-              `--profile-directory=${edgeConfig!.profile}`,
+              `--user-data-dir=${EDGE_PROFILE_COPY}`,
+              `--profile-directory=${settings.edgeProfile}`,
             ],
           },
         }

@@ -1,33 +1,64 @@
 /**
  * Global setup — runs once before all tests.
  *
- * 1. Discovers Edge profiles on this machine.
- * 2. Prompts you to pick one (unless EDGE_PROFILE is already set in .env).
- * 3. Copies the chosen profile to a temp dir so it doesn't clash with a
- *    running Edge instance.
- * 4. Writes the selection to .edge-profile-choice so the config can read it.
+ * Interactive prompts (saved between runs in .test-settings.json):
+ *   1. D365 URL — shown with last-used value; press Enter to keep it.
+ *   2. Edge profile — numbered list; press Enter to reuse previous choice.
+ *
+ * If EDGE_PROFILE or D365_URL are set in .env they become the initial
+ * defaults but can still be changed interactively.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as readline from 'readline';
+import 'dotenv/config';
 
 const EDGE_USER_DATA = path.join(
   os.homedir(),
   'AppData', 'Local', 'Microsoft', 'Edge', 'User Data',
 );
-const CHOICE_FILE = path.resolve(__dirname, '.edge-profile-choice');
+const SETTINGS_FILE = path.resolve(__dirname, '.test-settings.json');
 const EDGE_PROFILE_COPY = path.join(os.tmpdir(), 'pw-edge-profile');
 
+// ---------- types ----------
 interface EdgeProfile {
-  directory: string;   // e.g. "Default", "Profile 1"
-  displayName: string; // e.g. "Work", "Personal"
+  directory: string;
+  displayName: string;
+}
+
+interface SavedSettings {
+  d365Url: string;
+  edgeProfile: string;  // directory name, or '' for fallback
+}
+
+// ---------- helpers ----------
+
+function loadSettings(): SavedSettings {
+  if (fs.existsSync(SETTINGS_FILE)) {
+    try {
+      return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8'));
+    } catch { /* ignore corrupt file */ }
+  }
+  return {
+    d365Url: process.env.D365_URL || 'https://REPLACE_WITH_YOUR_ORG.crm.dynamics.com',
+    edgeProfile: process.env.EDGE_PROFILE?.trim() || '',
+  };
+}
+
+function saveSettings(settings: SavedSettings) {
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+}
+
+function ask(rl: readline.Interface, question: string): Promise<string> {
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => resolve(answer));
+  });
 }
 
 function discoverProfiles(): EdgeProfile[] {
   if (!fs.existsSync(EDGE_USER_DATA)) return [];
-
   const profiles: EdgeProfile[] = [];
   for (const entry of fs.readdirSync(EDGE_USER_DATA)) {
     const prefsPath = path.join(EDGE_USER_DATA, entry, 'Preferences');
@@ -36,36 +67,9 @@ function discoverProfiles(): EdgeProfile[] {
       const data = JSON.parse(fs.readFileSync(prefsPath, 'utf-8'));
       const displayName = data?.profile?.name || entry;
       profiles.push({ directory: entry, displayName });
-    } catch {
-      // skip unreadable profiles
-    }
+    } catch { /* skip */ }
   }
   return profiles;
-}
-
-async function promptUser(profiles: EdgeProfile[]): Promise<string> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
-  console.log('\n╔══════════════════════════════════════════╗');
-  console.log('║     Select an Edge profile for D365      ║');
-  console.log('╚══════════════════════════════════════════╝\n');
-
-  profiles.forEach((p, i) => {
-    console.log(`  [${i + 1}]  ${p.displayName}  (${p.directory})`);
-  });
-  console.log(`  [0]  Skip — use auth-state.json fallback\n`);
-
-  return new Promise((resolve) => {
-    rl.question('Enter number: ', (answer) => {
-      rl.close();
-      const num = parseInt(answer.trim(), 10);
-      if (num > 0 && num <= profiles.length) {
-        resolve(profiles[num - 1].directory);
-      } else {
-        resolve('');
-      }
-    });
-  });
 }
 
 function copyProfile(profileDir: string) {
@@ -73,46 +77,80 @@ function copyProfile(profileDir: string) {
   if (!fs.existsSync(src)) {
     throw new Error(`Edge profile "${profileDir}" not found at ${src}`);
   }
-
   if (fs.existsSync(EDGE_PROFILE_COPY)) {
     fs.rmSync(EDGE_PROFILE_COPY, { recursive: true, force: true });
   }
   fs.mkdirSync(EDGE_PROFILE_COPY, { recursive: true });
-
-  // Copy the profile subfolder
   fs.cpSync(src, path.join(EDGE_PROFILE_COPY, profileDir), { recursive: true });
-
-  // Copy Local State (needed for cookie decryption)
   const localState = path.join(EDGE_USER_DATA, 'Local State');
   if (fs.existsSync(localState)) {
     fs.copyFileSync(localState, path.join(EDGE_PROFILE_COPY, 'Local State'));
   }
 }
 
-async function globalSetup() {
-  // If EDGE_PROFILE is hard-coded in .env, use it directly (no prompt)
-  const envProfile = process.env.EDGE_PROFILE?.trim() || '';
-  let chosenProfile = envProfile;
+// ---------- main ----------
 
-  if (!chosenProfile) {
-    const profiles = discoverProfiles();
-    if (profiles.length > 0) {
-      chosenProfile = await promptUser(profiles);
+async function globalSetup() {
+  const saved = loadSettings();
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+  // ── 1. D365 URL ──────────────────────────────────────────
+  console.log('\n╔══════════════════════════════════════════╗');
+  console.log('║         D365 Copilot Test Setup          ║');
+  console.log('╚══════════════════════════════════════════╝');
+
+  console.log(`\n  Current D365 URL: ${saved.d365Url}`);
+  const urlInput = await ask(rl, '  Enter new URL or press Enter to keep: ');
+  const d365Url = urlInput.trim() || saved.d365Url;
+
+  // ── 2. Edge profile ──────────────────────────────────────
+  const profiles = discoverProfiles();
+  let edgeProfile = '';
+
+  if (profiles.length > 0) {
+    const savedIndex = profiles.findIndex((p) => p.directory === saved.edgeProfile);
+    const defaultLabel = savedIndex >= 0
+      ? `${profiles[savedIndex].displayName} (${profiles[savedIndex].directory})`
+      : 'none';
+
+    console.log(`\n  Edge profiles found:`);
+    profiles.forEach((p, i) => {
+      const marker = p.directory === saved.edgeProfile ? ' ◄ current' : '';
+      console.log(`  [${i + 1}]  ${p.displayName}  (${p.directory})${marker}`);
+    });
+    console.log(`  [0]  Skip — use auth-state.json fallback`);
+    console.log(`\n  Default: ${defaultLabel}`);
+
+    const profileInput = await ask(rl, '  Enter number or press Enter to keep default: ');
+    const num = profileInput.trim() === '' ? -1 : parseInt(profileInput.trim(), 10);
+
+    if (num === -1) {
+      // keep previous
+      edgeProfile = saved.edgeProfile;
+    } else if (num > 0 && num <= profiles.length) {
+      edgeProfile = profiles[num - 1].directory;
+    } else {
+      edgeProfile = '';
     }
   }
 
-  if (chosenProfile) {
-    console.log(`\n→ Using Edge profile: ${chosenProfile}`);
-    copyProfile(chosenProfile);
-    // Persist the choice so playwright.config.ts can read it
-    fs.writeFileSync(CHOICE_FILE, JSON.stringify({
-      profile: chosenProfile,
-      userDataDir: EDGE_PROFILE_COPY,
-    }));
+  rl.close();
+
+  // ── Save settings for next run ───────────────────────────
+  const settings: SavedSettings = { d365Url, edgeProfile };
+  saveSettings(settings);
+
+  // ── Apply Edge profile ───────────────────────────────────
+  if (edgeProfile) {
+    console.log(`\n→ D365 URL : ${d365Url}`);
+    console.log(`→ Profile  : ${edgeProfile}`);
+    copyProfile(edgeProfile);
   } else {
-    console.log('\n→ No Edge profile selected — falling back to auth-state.json');
-    if (fs.existsSync(CHOICE_FILE)) fs.unlinkSync(CHOICE_FILE);
+    console.log(`\n→ D365 URL : ${d365Url}`);
+    console.log('→ Profile  : none (using auth-state.json fallback)');
   }
+
+  console.log('');
 }
 
 export default globalSetup;

@@ -3,9 +3,19 @@ import * as path from 'path';
 import ExcelJS from 'exceljs';
 
 // ============================================================
-// CONFIGURATION — edit .env or set environment variables
+// CONFIGURATION — reads from .test-settings.json (set during
+// interactive setup) with .env / defaults as fallback.
 // ============================================================
-const D365_URL = process.env.D365_URL || 'https://REPLACE_WITH_YOUR_ORG.crm.dynamics.com';
+import * as fs from 'fs';
+
+const SETTINGS_FILE = path.resolve(__dirname, '..', '.test-settings.json');
+let savedUrl = '';
+try {
+  const s = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8'));
+  savedUrl = s.d365Url || '';
+} catch { /* use fallback */ }
+
+const D365_URL = savedUrl || process.env.D365_URL || 'https://REPLACE_WITH_YOUR_ORG.crm.dynamics.com';
 const RESPONSE_TIMEOUT = parseInt(process.env.COPILOT_RESPONSE_TIMEOUT || '60', 10) * 1000;
 const SIMILARITY_THRESHOLD = parseFloat(process.env.SIMILARITY_THRESHOLD || '0.6');
 
