@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Auth state (contains session tokens)
+auth-state.json
+
+# Environment config (contains org-specific URLs)
+.env
+
+# Test output
+Test Results*.xlsx
+
+# Playwright artifacts
+test-results/
+playwright-report/
+blob-report/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
