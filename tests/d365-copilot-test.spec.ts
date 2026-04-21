@@ -240,32 +240,49 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
   const prompts = await readPrompts();
   console.log(`\nLoaded ${prompts.length} prompts from: ${INPUT_XLSX}\n`);
 
-  // Navigate to D365 Customer Service
+  // Navigate to D365
   console.log(`Navigating to: ${D365_URL}\n`);
   await page.goto(D365_URL, { waitUntil: 'load', timeout: 120_000 });
   await page.waitForTimeout(5000);
 
-  // Open Copilot panel
+  // Pause — let the user navigate to Customer Service workspace and open Copilot
+  console.log('┌─────────────────────────────────────────────────────────────┐');
+  console.log('│  Browser is open.                                          │');
+  console.log('│                                                             │');
+  console.log('│  1. Navigate to the Customer Service workspace              │');
+  console.log('│  2. Make sure the Copilot side panel is open                │');
+  console.log('│  3. Copy the full URL from the browser address bar          │');
+  console.log('│  4. Paste it below so it is saved for next run              │');
+  console.log('└─────────────────────────────────────────────────────────────┘');
+
+  const readline = require('readline');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+  const askQuestion = (q: string): Promise<string> =>
+    new Promise((resolve) => rl.question(q, (a: string) => resolve(a)));
+
+  const newUrl = await askQuestion('\n  Paste the Customer Service URL (or press Enter to keep current): ');
+  rl.close();
+
+  if (newUrl.trim()) {
+    // Save the new URL for future runs
+    try {
+      const settingsPath = path.resolve(__dirname, '..', '.test-settings.json');
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      settings.d365Url = newUrl.trim();
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+      console.log(`  → URL saved for next run.`);
+    } catch { /* ignore */ }
+
+    // Navigate to the correct page
+    console.log(`\n  Navigating to: ${newUrl.trim()}\n`);
+    await page.goto(newUrl.trim(), { waitUntil: 'load', timeout: 120_000 });
+    await page.waitForTimeout(5000);
+  }
+
+  // Try to open Copilot panel (may already be open)
   await openCopilotPanel(page);
   await page.waitForTimeout(3000);
-
-  // Pause so the user can verify the page is correct and Copilot is open
-  console.log('┌──────────────────────────────────────────────────────────┐');
-  console.log('│  Browser is open. Please verify:                        │');
-  console.log('│    1. You are in the Customer Service workspace          │');
-  console.log('│    2. The Copilot side panel is visible                  │');
-  console.log('│                                                          │');
-  console.log('│  If needed, navigate to the correct page in the browser. │');
-  console.log('│  Then come back here and press Enter to start testing.   │');
-  console.log('└──────────────────────────────────────────────────────────┘');
-
-  const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout });
-  await new Promise<void>((resolve) => {
-    rl.question('\n  ✅ Press Enter to start sending prompts... ', () => {
-      rl.close();
-      resolve();
-    });
-  });
 
   const results: TestResult[] = [];
 
