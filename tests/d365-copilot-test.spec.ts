@@ -240,13 +240,32 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
   const prompts = await readPrompts();
   console.log(`\nLoaded ${prompts.length} prompts from: ${INPUT_XLSX}\n`);
 
-  // Navigate to D365
-  await page.goto(D365_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  // Navigate to D365 Customer Service
+  console.log(`Navigating to: ${D365_URL}\n`);
+  await page.goto(D365_URL, { waitUntil: 'load', timeout: 120_000 });
   await page.waitForTimeout(5000);
 
   // Open Copilot panel
   await openCopilotPanel(page);
   await page.waitForTimeout(3000);
+
+  // Pause so the user can verify the page is correct and Copilot is open
+  console.log('┌──────────────────────────────────────────────────────────┐');
+  console.log('│  Browser is open. Please verify:                        │');
+  console.log('│    1. You are in the Customer Service workspace          │');
+  console.log('│    2. The Copilot side panel is visible                  │');
+  console.log('│                                                          │');
+  console.log('│  If needed, navigate to the correct page in the browser. │');
+  console.log('│  Then come back here and press Enter to start testing.   │');
+  console.log('└──────────────────────────────────────────────────────────┘');
+
+  const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout });
+  await new Promise<void>((resolve) => {
+    rl.question('\n  ✅ Press Enter to start sending prompts... ', () => {
+      rl.close();
+      resolve();
+    });
+  });
 
   const results: TestResult[] = [];
 

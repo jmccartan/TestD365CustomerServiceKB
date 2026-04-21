@@ -80,7 +80,9 @@ async function globalSetup() {
   console.log('║         D365 Copilot Test Setup          ║');
   console.log('╚══════════════════════════════════════════╝');
 
-  console.log(`\n  Current D365 URL: ${saved.d365Url}`);
+  console.log('\n  Tip: Use the full Customer Service workspace URL, e.g.:');
+  console.log('  https://yourorg.crm.dynamics.com/main.aspx?appid=...');
+  console.log(`\n  Current URL: ${saved.d365Url}`);
   const urlInput = await ask(rl, '  Enter new URL or press Enter to keep: ');
   const d365Url = urlInput.trim() || saved.d365Url;
   rl.close();
