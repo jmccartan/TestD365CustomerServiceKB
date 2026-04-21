@@ -84,6 +84,7 @@ async function writeResults(results: TestResult[]) {
     { header: 'Similarity', key: 'similarity', width: 12 },
     { header: 'Result', key: 'result', width: 10 },
     { header: 'Referenced Docs', key: 'docs', width: 30 },
+    { header: 'Cited Sources', key: 'citedSources', width: 40 },
   ];
 
   // Style header
@@ -99,6 +100,7 @@ async function writeResults(results: TestResult[]) {
       similarity: `${(r.similarity * 100).toFixed(1)}%`,
       result: r.pass ? 'PASS' : 'FAIL',
       docs: r.referencedDocs,
+      citedSources: r.citedSources,
     });
 
     // Color the result cell green/red
@@ -130,6 +132,7 @@ interface TestResult {
   similarity: number;
   pass: boolean;
   referencedDocs: string;
+  citedSources: string;
 }
 
 // ============================================================
@@ -321,6 +324,45 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
   }
 
   return fullText.trim();
+}
+
+/**
+ * Expand the last "Check sources" accordion in the Copilot panel and
+ * return the cited source names as a comma-separated string.
+ */
+async function extractCitedSources(page: Page): Promise<string> {
+  const container = page.locator(COPILOT_CONTAINER_SEL);
+
+  // Find the last "Check sources" accordion button and expand it
+  const accordionBtns = container.locator(
+    'button[aria-expanded]:has-text("Check sources"), .fui-AccordionHeader button:has-text("Check sources")'
+  );
+  const count = await accordionBtns.count().catch(() => 0);
+  if (count === 0) return '';
+
+  const lastBtn = accordionBtns.last();
+  const isExpanded = await lastBtn.getAttribute('aria-expanded').catch(() => 'false');
+  if (isExpanded !== 'true') {
+    await lastBtn.click();
+    await page.waitForTimeout(1500);
+  }
+
+  // Grab citation links (aria-label="Citation N Title")
+  const citations = container.locator('a[aria-label^="Citation"]');
+  const citCount = await citations.count().catch(() => 0);
+  const sources: string[] = [];
+  for (let i = 0; i < citCount; i++) {
+    const text = await citations.nth(i).innerText().catch(() => '');
+    if (text.trim()) sources.push(text.trim());
+  }
+
+  // Collapse it again to keep the panel tidy for the next prompt
+  if (isExpanded !== 'true') {
+    await lastBtn.click().catch(() => {});
+    await page.waitForTimeout(500);
+  }
+
+  return sources.join(', ');
 }
 
 /**
@@ -545,6 +587,7 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
     let actualResponse = '';
     let sim = 0;
     let pass = false;
+    let citedSources = '';
 
     try {
       actualResponse = await sendPromptAndGetResponse(page, prompt);
@@ -554,6 +597,10 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
         await clearChatIfNeeded(page);
         actualResponse = await sendPromptAndGetResponse(page, prompt);
       }
+
+      // Extract the cited sources from the "Check sources" accordion
+      citedSources = await extractCitedSources(page);
+      if (citedSources) console.log(`  → Sources: ${citedSources}`);
 
       sim = similarity(expectedResponse, actualResponse);
       pass = sim >= SIMILARITY_THRESHOLD;
@@ -571,6 +618,7 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
       similarity: sim,
       pass,
       referencedDocs,
+      citedSources,
     });
   }
 
