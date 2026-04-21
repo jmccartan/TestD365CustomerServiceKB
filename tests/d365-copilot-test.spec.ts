@@ -251,8 +251,8 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
   console.log('│                                                             │');
   console.log('│  1. Navigate to the Customer Service workspace              │');
   console.log('│  2. Make sure the Copilot side panel is open                │');
-  console.log('│  3. Copy the full URL from the browser address bar          │');
-  console.log('│  4. Paste it below so it is saved for next run              │');
+  console.log('│  3. Press Enter here when ready — the URL will be saved     │');
+  console.log('│     automatically from the browser address bar.             │');
   console.log('└─────────────────────────────────────────────────────────────┘');
 
   const readline = require('readline');
@@ -261,23 +261,19 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
   const askQuestion = (q: string): Promise<string> =>
     new Promise((resolve) => rl.question(q, (a: string) => resolve(a)));
 
-  const newUrl = await askQuestion('\n  Paste the Customer Service URL (or press Enter to keep current): ');
+  await askQuestion('\n  ✅ Press Enter when you are on the correct page... ');
   rl.close();
 
-  if (newUrl.trim()) {
-    // Save the new URL for future runs
+  // Capture the current URL from the browser and save it for next run
+  const currentUrl = page.url();
+  if (currentUrl && currentUrl !== D365_URL && !currentUrl.startsWith('about:')) {
     try {
       const settingsPath = path.resolve(__dirname, '..', '.test-settings.json');
       const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-      settings.d365Url = newUrl.trim();
+      settings.d365Url = currentUrl;
       fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-      console.log(`  → URL saved for next run.`);
+      console.log(`  → URL saved for next run: ${currentUrl}\n`);
     } catch { /* ignore */ }
-
-    // Navigate to the correct page
-    console.log(`\n  Navigating to: ${newUrl.trim()}\n`);
-    await page.goto(newUrl.trim(), { waitUntil: 'load', timeout: 120_000 });
-    await page.waitForTimeout(5000);
   }
 
   // Try to open Copilot panel (may already be open)
