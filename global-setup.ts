@@ -20,6 +20,7 @@ const EDGE_USER_DATA = path.join(
   'AppData', 'Local', 'Microsoft', 'Edge', 'User Data',
 );
 const SETTINGS_FILE = path.resolve(__dirname, '.test-settings.json');
+const EDGE_PROFILE_COPY = path.join(os.tmpdir(), 'pw-edge-profile');
 
 // ---------- types ----------
 interface EdgeProfile {
@@ -71,10 +72,35 @@ function discoverProfiles(): EdgeProfile[] {
   return profiles;
 }
 
-function validateProfile(profileDir: string) {
+function prepareProfile(profileDir: string) {
   const src = path.join(EDGE_USER_DATA, profileDir);
   if (!fs.existsSync(src)) {
     throw new Error(`Edge profile "${profileDir}" not found at ${src}`);
+  }
+
+  // Copy the profile to a temp dir so we don't conflict with running Edge.
+  // DPAPI cookie decryption still works because it's tied to the Windows
+  // user account, not the file path.
+  console.log('  Copying Edge profile (this may take a moment)...');
+
+  if (fs.existsSync(EDGE_PROFILE_COPY)) {
+    fs.rmSync(EDGE_PROFILE_COPY, { recursive: true, force: true });
+  }
+  fs.mkdirSync(EDGE_PROFILE_COPY, { recursive: true });
+
+  // Copy the profile subfolder
+  fs.cpSync(src, path.join(EDGE_PROFILE_COPY, profileDir), { recursive: true });
+
+  // Copy Local State (contains the encryption key for cookies)
+  const localState = path.join(EDGE_USER_DATA, 'Local State');
+  if (fs.existsSync(localState)) {
+    fs.copyFileSync(localState, path.join(EDGE_PROFILE_COPY, 'Local State'));
+  }
+
+  // Copy First Run sentinel so Edge doesn't show onboarding
+  const firstRun = path.join(EDGE_USER_DATA, 'First Run');
+  if (fs.existsSync(firstRun)) {
+    fs.copyFileSync(firstRun, path.join(EDGE_PROFILE_COPY, 'First Run'));
   }
 }
 
@@ -103,8 +129,8 @@ async function globalSetup() {
       ? `${profiles[savedIndex].displayName} (${profiles[savedIndex].directory})`
       : 'none';
 
-    console.log(`\n  ⚠  Close any Edge windows using the selected profile before continuing.`);
-    console.log(`     The test cannot use a profile that is currently open in Edge.\n`);
+    console.log(`\n  ℹ  The selected profile will be copied so Edge can remain open.`);
+    console.log(`     If prompted to sign in, your first login will be remembered.\n`);
     console.log(`  Edge profiles found:`);
     profiles.forEach((p, i) => {
       const marker = p.directory === saved.edgeProfile ? ' ◄ current' : '';
@@ -136,7 +162,7 @@ async function globalSetup() {
   if (edgeProfile) {
     console.log(`\n→ D365 URL : ${d365Url}`);
     console.log(`→ Profile  : ${edgeProfile}`);
-    validateProfile(edgeProfile);
+    prepareProfile(edgeProfile);
   } else {
     console.log(`\n→ D365 URL : ${d365Url}`);
     console.log('→ Profile  : none (using auth-state.json fallback)');
