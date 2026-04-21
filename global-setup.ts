@@ -71,24 +71,37 @@ function discoverProfiles(): EdgeProfile[] {
   return profiles;
 }
 
+function isEdgeRunning(): boolean {
+  try {
+    const { execSync } = require('child_process');
+    const output = execSync('tasklist /FI "IMAGENAME eq msedge.exe" /NH', { encoding: 'utf-8' });
+    return output.includes('msedge.exe');
+  } catch {
+    return false;
+  }
+}
+
 function validateProfile(profileDir: string) {
   const src = path.join(EDGE_USER_DATA, profileDir);
   if (!fs.existsSync(src)) {
     throw new Error(`Edge profile "${profileDir}" not found at ${src}`);
   }
 
-  // Check if Edge is using this profile (lock file present = profile in use)
-  const lockFile = path.join(src, 'lockfile');
-  const parentLock = path.join(EDGE_USER_DATA, 'lockfile');
-  if (fs.existsSync(lockFile) || fs.existsSync(parentLock)) {
-    console.error('\n  ╔══════════════════════════════════════════════════════════╗');
-    console.error('  ║  ERROR: Edge is currently running with this profile!    ║');
-    console.error('  ╠══════════════════════════════════════════════════════════╣');
-    console.error(`  ║  Profile: ${profileDir.padEnd(46)}║`);
-    console.error('  ║                                                          ║');
-    console.error('  ║  Please close ALL Edge windows using this profile,       ║');
-    console.error('  ║  then run the test again.                                ║');
-    console.error('  ╚══════════════════════════════════════════════════════════╝\n');
+  // Check if any Edge process is running (can't share the User Data dir)
+  if (isEdgeRunning()) {
+    console.error('');
+    console.error('  ┌────────────────────────────────────────────────────┐');
+    console.error('  │  ERROR: Edge is currently running!                 │');
+    console.error('  │                                                    │');
+    console.error(`  │  Profile: ${profileDir.padEnd(41)}│`);
+    console.error('  │                                                    │');
+    console.error('  │  Please close ALL Edge windows and make sure       │');
+    console.error('  │  Edge is fully exited, then run the test again.    │');
+    console.error('  │                                                    │');
+    console.error('  │  Tip: Check the system tray — Edge may still       │');
+    console.error('  │  be running in the background.                     │');
+    console.error('  └────────────────────────────────────────────────────┘');
+    console.error('');
     process.exit(1);
   }
 }
