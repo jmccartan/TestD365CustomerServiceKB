@@ -1,12 +1,10 @@
 import { defineConfig } from '@playwright/test';
 import * as path from 'path';
 import * as fs from 'fs';
-import * as os from 'os';
 import 'dotenv/config';
 
 // ---- Read saved settings written by global-setup ----------
 const SETTINGS_FILE = path.resolve(__dirname, '.test-settings.json');
-const EDGE_PROFILE_COPY = path.join(os.tmpdir(), 'pw-edge-profile');
 
 interface SavedSettings {
   d365Url: string;
@@ -33,24 +31,16 @@ export default defineConfig({
   expect: { timeout: 60_000 },
   fullyParallel: false,
   retries: 0,
-  workers: 1, // sequential — one browser session against D365
+  workers: 1,
   use: {
     baseURL: settings.d365Url,
 
-    // Auth: Edge profile takes priority; storageState is fallback
+    // When using an Edge profile the test launches a persistent
+    // context itself (Playwright requires launchPersistentContext
+    // for user-data-dir). Config just sets common defaults here.
     ...(useEdgeProfile
-      ? {
-          channel: 'msedge',
-          launchOptions: {
-            args: [
-              `--user-data-dir=${EDGE_PROFILE_COPY}`,
-              `--profile-directory=${settings.edgeProfile}`,
-            ],
-          },
-        }
-      : {
-          storageState: path.resolve(__dirname, 'auth-state.json'),
-        }),
+      ? { channel: 'msedge' }
+      : { storageState: path.resolve(__dirname, 'auth-state.json') }),
 
     headless: false,
     viewport: { width: 1920, height: 1080 },
