@@ -137,14 +137,51 @@ interface TestResult {
 // Customer Service. Adjust if your environment differs.
 // ============================================================
 
+/** Try to locate the Copilot iframe (if the chat is embedded in one) */
+async function getCopilotFrame(page: Page): Promise<Page | import('@playwright/test').Frame> {
+  // D365 Copilot often lives inside an iframe
+  const iframeSelectors = [
+    'iframe[src*="copilot"]',
+    'iframe[src*="omnichannelchat"]',
+    'iframe[src*="webchat"]',
+    'iframe[title*="Copilot"]',
+    'iframe[title*="copilot"]',
+    'iframe[id*="copilot"]',
+    'iframe[name*="copilot"]',
+  ];
+
+  for (const sel of iframeSelectors) {
+    const frameEl = page.locator(sel).first();
+    if (await frameEl.isVisible({ timeout: 2000 }).catch(() => false)) {
+      const frame = page.frame({ url: /copilot|omnichannelchat|webchat/i })
+        || (await frameEl.contentFrame());
+      if (frame) {
+        console.log(`  Found Copilot iframe: ${sel}`);
+        return frame;
+      }
+    }
+  }
+
+  // Also check all frames by URL pattern
+  for (const frame of page.frames()) {
+    const url = frame.url().toLowerCase();
+    if (url.includes('copilot') || url.includes('webchat') || url.includes('omnichannelchat')) {
+      console.log(`  Found Copilot frame by URL: ${url.slice(0, 80)}`);
+      return frame;
+    }
+  }
+
+  // No iframe found — Copilot is on the main page
+  return page;
+}
+
 async function openCopilotPanel(page: Page) {
-  // Look for the Copilot button in the D365 command bar / side pane
-  // Common selectors — update if your UI differs:
   const copilotButtonSelectors = [
     'button[aria-label*="Copilot"]',
     'button[title*="Copilot"]',
     '[data-id="msdyn_copilot"]',
     'button:has-text("Copilot")',
+    '[data-id*="copilot" i]',
   ];
 
   for (const selector of copilotButtonSelectors) {
@@ -156,35 +193,66 @@ async function openCopilotPanel(page: Page) {
     }
   }
 
-  console.warn('Could not find Copilot button — panel may already be open.');
+  console.warn('  Could not find Copilot button — panel may already be open.');
 }
 
 async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<string> {
-  // -------------------------------------------------------
-  // COPILOT INPUT — the chat text box in the Copilot pane
-  // Update these selectors to match your D365 environment.
-  // -------------------------------------------------------
+  // Find the right context (main page or iframe)
+  const frame = await getCopilotFrame(page);
+
   const inputSelectors = [
     'textarea[data-id*="copilot"]',
     'textarea[aria-label*="Type your message"]',
     'textarea[aria-label*="Ask a question"]',
+    'textarea[aria-label*="Ask Copilot"]',
     'textarea[placeholder*="Ask"]',
+    'textarea[placeholder*="Type"]',
     '[data-id="webchat-sendbox-input"]',
     'textarea[data-id="webchat-sendbox-input"]',
+    'input[data-id="webchat-sendbox-input"]',
+    // Generic fallbacks
+    'textarea',
+    'input[type="text"]',
   ];
 
-  let input: ReturnType<Page['locator']> | null = null;
+  let input: ReturnType<typeof frame.locator> | null = null;
   for (const sel of inputSelectors) {
-    const loc = page.locator(sel).first();
+    const loc = frame.locator(sel).first();
     if (await loc.isVisible({ timeout: 3000 }).catch(() => false)) {
       input = loc;
+      console.log(`  Using input selector: ${sel}`);
       break;
     }
   }
 
   if (!input) {
+    // Dump diagnostic info to help identify the correct selectors
+    console.error('\n  ── SELECTOR DEBUG INFO ──');
+    console.error(`  Page URL: ${page.url()}`);
+    console.error(`  Frames (${page.frames().length}):`);
+    for (const f of page.frames()) {
+      console.error(`    - ${f.url().slice(0, 100)}`);
+    }
+    const textareas = await frame.locator('textarea').count();
+    const inputs = await frame.locator('input[type="text"]').count();
+    console.error(`  Textareas in target frame: ${textareas}`);
+    console.error(`  Text inputs in target frame: ${inputs}`);
+    // List all textareas and their attributes
+    const taInfo = await frame.locator('textarea').evaluateAll((els) =>
+      els.map((el) => ({
+        id: el.id,
+        name: el.getAttribute('name'),
+        ariaLabel: el.getAttribute('aria-label'),
+        placeholder: el.getAttribute('placeholder'),
+        dataId: el.getAttribute('data-id'),
+        classes: el.className.slice(0, 60),
+      }))
+    );
+    console.error('  Textarea details:', JSON.stringify(taInfo, null, 2));
+    console.error('  ── END DEBUG INFO ──\n');
+
     throw new Error(
-      'Could not find the Copilot chat input. Please update the selectors in sendPromptAndGetResponse().'
+      'Could not find the Copilot chat input. See debug info above.'
     );
   }
 
@@ -193,18 +261,20 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
     '[data-content="message-body"]',
     '.webchat__bubble__content',
     '[class*="message-content"]',
+    '.ac-textBlock',
     '[role="listitem"]',
+    '[role="log"] [role="group"]',
   ];
 
   let messageSelector = messageContainerSelectors[0];
   for (const sel of messageContainerSelectors) {
-    if (await page.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
+    if (await frame.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
       messageSelector = sel;
       break;
     }
   }
 
-  const existingCount = await page.locator(messageSelector).count();
+  const existingCount = await frame.locator(messageSelector).count();
 
   // Type and send the prompt
   await input.click();
@@ -212,10 +282,10 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
   await page.keyboard.press('Enter');
 
   // Wait for a new bot response to appear
-  await page.waitForFunction(
+  await frame.waitForFunction(
     ({ selector, prevCount }) => {
       const msgs = document.querySelectorAll(selector);
-      return msgs.length > prevCount + 1; // +1 for our sent message, +1 for bot reply
+      return msgs.length > prevCount + 1;
     },
     { selector: messageSelector, prevCount: existingCount },
     { timeout: RESPONSE_TIMEOUT }
@@ -225,7 +295,7 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
   await page.waitForTimeout(3000);
 
   // Grab the last bot message
-  const messages = page.locator(messageSelector);
+  const messages = frame.locator(messageSelector);
   const lastMessage = messages.last();
   const responseText = await lastMessage.innerText();
 
