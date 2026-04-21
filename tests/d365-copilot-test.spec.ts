@@ -144,20 +144,32 @@ async function findCopilotInput(page: Page): Promise<{
   frame: Page | import('@playwright/test').Frame;
   input: ReturnType<Page['locator']>;
 }> {
-  // Ordered from most specific to least specific
-  const inputSelectors = [
-    // D365 Copilot specific
+  // ── Shadow DOM selectors (D365 Copilot uses a <copilot-panel> web component) ──
+  const shadowSelectors = [
+    'copilot-panel >> input[placeholder*="Ask"]',
+    'copilot-panel >> textarea[placeholder*="Ask"]',
+    'copilot-panel >> input[placeholder*="question"]',
+    'copilot-panel >> textarea',
+    'copilot-panel >> input[type="text"]',
+    '[data-testid="copilot-panel"] >> input[placeholder*="Ask"]',
+    '[data-testid="copilot-panel"] >> textarea',
+    '#msdyn_copilot >> input',
+    '#msdyn_copilot >> textarea',
+  ];
+
+  // Regular DOM selectors (ordered from most specific to least)
+  const regularSelectors = [
     'div[class*="CopilotRoot"] textarea',
     'textarea[aria-label="Type your message"]',
     'textarea[aria-label*="Type your message"]',
     'textarea[aria-label*="Ask a question"]',
     'textarea[aria-label*="Ask Copilot"]',
     'textarea[data-id*="copilot"]',
-    // Webchat / OmniChannel
+    'input[placeholder*="Ask a question"]',
+    'input[placeholder*="Ask Copilot"]',
     '[data-id="webchat-sendbox-input"]',
     'textarea[data-id="webchat-sendbox-input"]',
     'input[data-id="webchat-sendbox-input"]',
-    // Broader matches
     'textarea[placeholder*="Ask"]',
     'textarea[placeholder*="Type"]',
     'textarea[placeholder*="message"]',
@@ -167,11 +179,13 @@ async function findCopilotInput(page: Page): Promise<{
     'div[contenteditable="true"][data-id*="copilot"]',
   ];
 
-  // Search the main page and every iframe for a matching input
+  const allSelectors = [...shadowSelectors, ...regularSelectors];
+
+  // Search the main page and every iframe
   const framesToCheck: Array<Page | import('@playwright/test').Frame> = [page, ...page.frames()];
 
   for (const frame of framesToCheck) {
-    for (const sel of inputSelectors) {
+    for (const sel of allSelectors) {
       try {
         const loc = frame.locator(sel).first();
         if (await loc.isVisible({ timeout: 1000 }).catch(() => false)) {
@@ -186,7 +200,6 @@ async function findCopilotInput(page: Page): Promise<{
   // Last resort: find any visible textarea or contenteditable in any frame
   for (const frame of framesToCheck) {
     try {
-      // Check textareas
       const taCount = await frame.locator('textarea').count();
       for (let i = 0; i < taCount; i++) {
         const ta = frame.locator('textarea').nth(i);
@@ -196,7 +209,6 @@ async function findCopilotInput(page: Page): Promise<{
           return { frame, input: ta };
         }
       }
-      // Check contenteditable divs (some chat UIs use these instead of textarea)
       const ceCount = await frame.locator('div[contenteditable="true"]').count();
       for (let i = 0; i < ceCount; i++) {
         const ce = frame.locator('div[contenteditable="true"]').nth(i);
@@ -209,41 +221,45 @@ async function findCopilotInput(page: Page): Promise<{
     } catch { /* skip */ }
   }
 
-  // Dump comprehensive debug info to help identify the correct element
+  // Dump comprehensive debug info
   console.error('\n  ── SELECTOR DEBUG INFO ──');
   console.error(`  Page URL: ${page.url()}`);
   console.error(`  Total frames: ${page.frames().length}`);
-  for (const f of page.frames()) {
-    const url = f.url();
-    if (url.includes('blank.htm')) continue; // skip placeholder frames
-    const taCount = await f.locator('textarea').count().catch(() => 0);
-    const inputCount = await f.locator('input').count().catch(() => 0);
-    const ceCount = await f.locator('div[contenteditable="true"]').count().catch(() => 0);
-    console.error(`\n  Frame: ${url.slice(0, 100)}`);
+
+  // Check for shadow DOM hosts on each frame
+  for (const frame of framesToCheck) {
+    const url = 'url' in frame ? (frame as any).url() : page.url();
+    if (String(url).includes('blank.htm')) continue;
+    const taCount = await frame.locator('textarea').count().catch(() => 0);
+    const inputCount = await frame.locator('input').count().catch(() => 0);
+    const ceCount = await frame.locator('div[contenteditable="true"]').count().catch(() => 0);
+
+    // Check for shadow DOM hosts
+    const shadowHosts = await frame.evaluate(() => {
+      const hosts: string[] = [];
+      document.querySelectorAll('*').forEach((el) => {
+        if (el.shadowRoot) {
+          hosts.push(`<${el.tagName.toLowerCase()} id="${el.id}" class="${el.className}">`);
+        }
+      });
+      return hosts;
+    }).catch(() => [] as string[]);
+
+    console.error(`\n  Frame: ${String(url).slice(0, 100)}`);
     console.error(`    textareas: ${taCount}, inputs: ${inputCount}, contenteditable: ${ceCount}`);
+    if (shadowHosts.length > 0) {
+      console.error(`    Shadow DOM hosts: ${JSON.stringify(shadowHosts)}`);
+    }
     if (taCount > 0) {
-      const taInfo = await f.locator('textarea').evaluateAll((els) =>
+      const taInfo = await frame.locator('textarea').evaluateAll((els) =>
         els.map((el) => ({
           visible: el.offsetParent !== null,
-          id: el.id || '(none)',
           ariaLabel: el.getAttribute('aria-label') || '(none)',
           placeholder: el.getAttribute('placeholder') || '(none)',
           dataId: el.getAttribute('data-id') || '(none)',
         }))
       ).catch(() => []);
       console.error('    textareas:', JSON.stringify(taInfo));
-    }
-    if (ceCount > 0) {
-      const ceInfo = await f.locator('div[contenteditable="true"]').evaluateAll((els) =>
-        els.map((el) => ({
-          visible: el.offsetParent !== null,
-          id: el.id || '(none)',
-          ariaLabel: el.getAttribute('aria-label') || '(none)',
-          dataId: el.getAttribute('data-id') || '(none)',
-          classes: el.className.slice(0, 80),
-        }))
-      ).catch(() => []);
-      console.error('    contenteditable:', JSON.stringify(ceInfo));
     }
   }
   console.error('  ── END DEBUG INFO ──\n');
