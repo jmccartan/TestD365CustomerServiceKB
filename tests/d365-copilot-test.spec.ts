@@ -324,14 +324,14 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
   // Type and send the prompt
   await input.click();
   await input.fill(prompt);
-  await page.keyboard.press('Enter');
+  await input.press('Enter');
 
   // Wait for a new bot response to appear
   if (messageSelector) {
     await frame.waitForFunction(
       ({ selector, prevCount }) => {
         const msgs = document.querySelectorAll(selector);
-        return msgs.length > prevCount + 1;
+        return msgs.length > prevCount;
       },
       { selector: messageSelector, prevCount: existingCount },
       { timeout: RESPONSE_TIMEOUT }
@@ -343,11 +343,13 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
   }
 
   // Wait for the response to finish streaming — keep checking until the
-  // last message text stabilizes (no changes for 3 seconds)
+  // last message text stabilizes (no changes for 3 seconds).
+  // Cap at 90 seconds to avoid hanging forever.
   if (messageSelector) {
     let lastText = '';
     let stableCount = 0;
-    while (stableCount < 3) {
+    const stabilityDeadline = Date.now() + 90_000;
+    while (stableCount < 3 && Date.now() < stabilityDeadline) {
       await page.waitForTimeout(1000);
       const currentText = await frame.locator(messageSelector).last().innerText().catch(() => '');
       if (currentText === lastText && currentText.length > 0) {
@@ -399,65 +401,93 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
 }
 
 // ============================================================
-// POPUP DISMISSAL
+// D365 PAGE READINESS & POPUP DISMISSAL
 // ============================================================
 
-async function dismissPopups(page: Page) {
-  // Handle browser-level dialogs (permissions, alerts)
-  page.on('dialog', async (dialog) => {
-    console.log(`  Dismissing dialog: ${dialog.message().slice(0, 60)}`);
-    await dialog.dismiss();
-  });
+/**
+ * Wait for the D365 app shell and Copilot panel to be fully rendered.
+ * Much more reliable than networkidle for a heavy SPA like D365.
+ */
+async function waitForD365Ready(page: Page) {
+  // 1. Wait for the app shell container (indicates D365 frame loaded)
+  console.log('  Waiting for D365 app shell...');
+  await page.locator('#shell-container').waitFor({ state: 'visible', timeout: 120_000 });
+  console.log('  ✓ App shell visible');
 
-  // Dismiss known D365/Copilot popups by clicking close/dismiss buttons
-  const dismissSelectors = [
-    // Microphone permission popups
-    'button[aria-label*="Block"]',
-    'button[aria-label*="Deny"]',
-    'button[aria-label*="Don\'t allow"]',
-    // "A copilot for you" and similar onboarding popups
-    'button[aria-label*="Close"]',
-    'button[aria-label*="Dismiss"]',
+  // 2. Wait for the Copilot panel control to be present in the DOM
+  console.log('  Waiting for Copilot control...');
+  await page.locator('[data-id="MscrmControls.CSIntelligence.AICopilotControl_container"]')
+    .waitFor({ state: 'attached', timeout: 60_000 });
+  console.log('  ✓ Copilot control attached');
+
+  // 3. Wait for the Copilot pane container to be visible
+  console.log('  Waiting for Copilot pane...');
+  await page.locator('[data-id*="pane-container-AppSidePane_MscrmControls.CSIntelligence.AICopilotControl"]')
+    .waitFor({ state: 'visible', timeout: 30_000 })
+    .catch(() => console.log('  Copilot pane not auto-visible — may need to click Copilot button'));
+  console.log('  ✓ Copilot pane ready');
+}
+
+/**
+ * Dismiss D365 popups/dialogs. Searches main page and all iframes.
+ * Targets the specific "A Copilot for you!" onboarding dialog and
+ * any other role="dialog" overlays.
+ */
+async function dismissPopups(page: Page) {
+  const framesToCheck: Array<Page | import('@playwright/test').Frame> = [page, ...page.frames()];
+
+  // Target dismiss/close buttons inside visible dialogs first (most specific)
+  const dialogDismissSelectors = [
+    '[role="dialog"] button[aria-label="Dismiss"]',
+    '[role="dialog"] button[aria-label="Close"]',
+    '[role="alertdialog"] button[aria-label="Dismiss"]',
+    '[role="alertdialog"] button[aria-label="Close"]',
+  ];
+
+  // Then general dismiss-like buttons
+  const generalDismissSelectors = [
+    'button[aria-label="Dismiss"]',
+    'button[aria-label="Close"]',
     'button[aria-label*="Got it"]',
     'button[aria-label*="Skip"]',
     'button:has-text("Got it")',
     'button:has-text("Skip")',
-    'button:has-text("Close")',
     'button:has-text("Dismiss")',
     'button:has-text("No thanks")',
     'button:has-text("Maybe later")',
-    // Generic close buttons on overlays/modals
-    '[class*="dismiss"] button',
-    '[class*="modal"] button[class*="close"]',
-    '[role="dialog"] button[aria-label*="Close"]',
-    '[role="dialog"] button[aria-label*="Dismiss"]',
   ];
 
-  for (const sel of dismissSelectors) {
-    try {
-      const btn = page.locator(sel).first();
-      if (await btn.isVisible({ timeout: 500 }).catch(() => false)) {
-        const text = await btn.innerText().catch(() => sel);
-        console.log(`  Dismissing popup: ${text.trim().slice(0, 40) || sel}`);
-        await btn.click();
-        await page.waitForTimeout(500);
-      }
-    } catch { /* ignore */ }
-  }
+  const allSelectors = [...dialogDismissSelectors, ...generalDismissSelectors];
 
-  // Also check inside iframes for popups
-  for (const frame of page.frames()) {
-    for (const sel of ['button:has-text("Got it")', 'button:has-text("Close")', 'button:has-text("Dismiss")']) {
+  for (const frame of framesToCheck) {
+    for (const sel of allSelectors) {
       try {
-        const btn = frame.locator(sel).first();
-        if (await btn.isVisible({ timeout: 300 }).catch(() => false)) {
-          console.log(`  Dismissing popup in frame: ${sel}`);
-          await btn.click();
-          await page.waitForTimeout(500);
+        const btns = frame.locator(sel);
+        const count = await btns.count();
+        for (let i = 0; i < count; i++) {
+          const btn = btns.nth(i);
+          if (await btn.isVisible({ timeout: 300 }).catch(() => false)) {
+            const label = await btn.getAttribute('aria-label').catch(() => '');
+            const text = await btn.innerText().catch(() => '');
+            console.log(`  Dismissing: "${label || text.trim().slice(0, 40)}" (${sel})`);
+            await btn.click();
+            await page.waitForTimeout(500);
+          }
         }
       } catch { /* ignore */ }
     }
   }
+}
+
+/**
+ * Wait for any visible [role="dialog"] to disappear, with a timeout.
+ * Useful after dismissing popups to ensure overlay is gone.
+ */
+async function waitForDialogsToClear(page: Page, timeout = 10_000) {
+  const dialog = page.locator('[role="dialog"]:visible');
+  await dialog.waitFor({ state: 'hidden', timeout }).catch(() => {
+    console.log('  Some dialogs still visible after timeout — continuing.');
+  });
 }
 
 // ============================================================
@@ -465,6 +495,12 @@ async function dismissPopups(page: Page) {
 // ============================================================
 
 test('D365 Copilot prompt regression test', async ({ page }) => {
+  // Register dialog handler once to avoid accumulating listeners
+  page.on('dialog', async (dialog) => {
+    console.log(`  Dismissing dialog: ${dialog.message().slice(0, 60)}`);
+    await dialog.dismiss();
+  });
+
   const prompts = await readPrompts();
   console.log(`\nLoaded ${prompts.length} prompts from: ${INPUT_XLSX}\n`);
 
@@ -472,21 +508,19 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
   console.log(`Navigating to: ${D365_URL}\n`);
   await page.goto(D365_URL, { waitUntil: 'load', timeout: 120_000 });
 
-  // Wait for D365 to fully initialize (no network activity for 2s)
-  console.log('  Waiting for page to fully load...\n');
-  await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(() => {
-    console.log('  Network did not fully idle — continuing anyway.');
-  });
+  // Wait for D365 SPA to fully render (element-based, not networkidle)
+  await waitForD365Ready(page);
 
   // Try to open Copilot panel (may already be open)
   await openCopilotPanel(page);
-  await page.waitForTimeout(3000);
 
-  // Dismiss popups multiple times with pauses to catch late-loading ones
-  for (let i = 0; i < 3; i++) {
-    await dismissPopups(page);
-    await page.waitForTimeout(2000);
-  }
+  // Dismiss the "A Copilot for you!" onboarding dialog and any others
+  console.log('  Checking for popups...');
+  await dismissPopups(page);
+  await waitForDialogsToClear(page);
+  // Second pass — some popups appear after the first is dismissed
+  await page.waitForTimeout(2000);
+  await dismissPopups(page);
 
   // Pause — let the user verify the page is ready
   console.log('');
