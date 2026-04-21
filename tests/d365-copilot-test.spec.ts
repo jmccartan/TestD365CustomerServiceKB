@@ -455,14 +455,20 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
   // Navigate to D365
   console.log(`Navigating to: ${D365_URL}\n`);
   await page.goto(D365_URL, { waitUntil: 'load', timeout: 120_000 });
-  await page.waitForTimeout(5000);
+
+  // Wait for D365 to fully load — popups take time to appear
+  console.log('  Waiting for page to fully load...\n');
+  await page.waitForTimeout(10000);
 
   // Try to open Copilot panel (may already be open)
   await openCopilotPanel(page);
   await page.waitForTimeout(3000);
 
-  // Dismiss any popups (microphone permission, "A copilot for you", etc.)
-  await dismissPopups(page);
+  // Dismiss popups multiple times with pauses to catch late-loading ones
+  for (let i = 0; i < 3; i++) {
+    await dismissPopups(page);
+    await page.waitForTimeout(2000);
+  }
 
   // Pause — let the user verify the page is ready
   console.log('');
