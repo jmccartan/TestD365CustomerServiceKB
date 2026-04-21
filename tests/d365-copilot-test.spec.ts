@@ -137,42 +137,69 @@ interface TestResult {
 // Customer Service. Adjust if your environment differs.
 // ============================================================
 
-/** Try to locate the Copilot iframe (if the chat is embedded in one) */
-async function getCopilotFrame(page: Page): Promise<Page | import('@playwright/test').Frame> {
-  // D365 Copilot often lives inside an iframe
-  const iframeSelectors = [
-    'iframe[src*="copilot"]',
-    'iframe[src*="omnichannelchat"]',
-    'iframe[src*="webchat"]',
-    'iframe[title*="Copilot"]',
-    'iframe[title*="copilot"]',
-    'iframe[id*="copilot"]',
-    'iframe[name*="copilot"]',
+/** Search all frames for the one containing the Copilot chat input */
+async function findCopilotInput(page: Page): Promise<{
+  frame: Page | import('@playwright/test').Frame;
+  input: ReturnType<Page['locator']>;
+}> {
+  const inputSelectors = [
+    'textarea[data-id*="copilot"]',
+    'textarea[aria-label*="Type your message"]',
+    'textarea[aria-label*="Ask a question"]',
+    'textarea[aria-label*="Ask Copilot"]',
+    'textarea[placeholder*="Ask"]',
+    'textarea[placeholder*="Type"]',
+    '[data-id="webchat-sendbox-input"]',
+    'textarea[data-id="webchat-sendbox-input"]',
+    'input[data-id="webchat-sendbox-input"]',
   ];
 
-  for (const sel of iframeSelectors) {
-    const frameEl = page.locator(sel).first();
-    if (await frameEl.isVisible({ timeout: 2000 }).catch(() => false)) {
-      const frame = page.frame({ url: /copilot|omnichannelchat|webchat/i })
-        || (await frameEl.contentFrame());
-      if (frame) {
-        console.log(`  Found Copilot iframe: ${sel}`);
-        return frame;
+  // Search the main page and every iframe for a matching input
+  const framesToCheck: Array<Page | import('@playwright/test').Frame> = [page, ...page.frames()];
+
+  for (const frame of framesToCheck) {
+    for (const sel of inputSelectors) {
+      try {
+        const loc = frame.locator(sel).first();
+        if (await loc.isVisible({ timeout: 1000 }).catch(() => false)) {
+          const frameUrl = 'url' in frame ? (frame as any).url() : page.url();
+          console.log(`  Found input (${sel}) in frame: ${String(frameUrl).slice(0, 80)}`);
+          return { frame, input: loc };
+        }
+      } catch { /* skip */ }
+    }
+  }
+
+  // Last resort: find any visible textarea in any frame
+  for (const frame of framesToCheck) {
+    try {
+      const count = await frame.locator('textarea').count();
+      for (let i = 0; i < count; i++) {
+        const ta = frame.locator('textarea').nth(i);
+        if (await ta.isVisible({ timeout: 500 }).catch(() => false)) {
+          const frameUrl = 'url' in frame ? (frame as any).url() : page.url();
+          console.log(`  Found generic textarea in frame: ${String(frameUrl).slice(0, 80)}`);
+          return { frame, input: ta };
+        }
       }
-    }
+    } catch { /* skip */ }
   }
 
-  // Also check all frames by URL pattern
-  for (const frame of page.frames()) {
-    const url = frame.url().toLowerCase();
-    if (url.includes('copilot') || url.includes('webchat') || url.includes('omnichannelchat')) {
-      console.log(`  Found Copilot frame by URL: ${url.slice(0, 80)}`);
-      return frame;
+  // Dump debug info
+  console.error('\n  ── SELECTOR DEBUG INFO ──');
+  console.error(`  Page URL: ${page.url()}`);
+  console.error(`  Frames (${page.frames().length}):`);
+  for (const f of page.frames()) {
+    const url = f.url();
+    const taCount = await f.locator('textarea').count().catch(() => 0);
+    const inputCount = await f.locator('input[type="text"]').count().catch(() => 0);
+    if (taCount > 0 || inputCount > 0) {
+      console.error(`    - ${url.slice(0, 100)} [${taCount} textareas, ${inputCount} inputs]`);
     }
   }
+  console.error('  ── END DEBUG INFO ──\n');
 
-  // No iframe found — Copilot is on the main page
-  return page;
+  throw new Error('Could not find the Copilot chat input in any frame.');
 }
 
 async function openCopilotPanel(page: Page) {
@@ -197,64 +224,8 @@ async function openCopilotPanel(page: Page) {
 }
 
 async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<string> {
-  // Find the right context (main page or iframe)
-  const frame = await getCopilotFrame(page);
-
-  const inputSelectors = [
-    'textarea[data-id*="copilot"]',
-    'textarea[aria-label*="Type your message"]',
-    'textarea[aria-label*="Ask a question"]',
-    'textarea[aria-label*="Ask Copilot"]',
-    'textarea[placeholder*="Ask"]',
-    'textarea[placeholder*="Type"]',
-    '[data-id="webchat-sendbox-input"]',
-    'textarea[data-id="webchat-sendbox-input"]',
-    'input[data-id="webchat-sendbox-input"]',
-    // Generic fallbacks
-    'textarea',
-    'input[type="text"]',
-  ];
-
-  let input: ReturnType<typeof frame.locator> | null = null;
-  for (const sel of inputSelectors) {
-    const loc = frame.locator(sel).first();
-    if (await loc.isVisible({ timeout: 3000 }).catch(() => false)) {
-      input = loc;
-      console.log(`  Using input selector: ${sel}`);
-      break;
-    }
-  }
-
-  if (!input) {
-    // Dump diagnostic info to help identify the correct selectors
-    console.error('\n  ── SELECTOR DEBUG INFO ──');
-    console.error(`  Page URL: ${page.url()}`);
-    console.error(`  Frames (${page.frames().length}):`);
-    for (const f of page.frames()) {
-      console.error(`    - ${f.url().slice(0, 100)}`);
-    }
-    const textareas = await frame.locator('textarea').count();
-    const inputs = await frame.locator('input[type="text"]').count();
-    console.error(`  Textareas in target frame: ${textareas}`);
-    console.error(`  Text inputs in target frame: ${inputs}`);
-    // List all textareas and their attributes
-    const taInfo = await frame.locator('textarea').evaluateAll((els) =>
-      els.map((el) => ({
-        id: el.id,
-        name: el.getAttribute('name'),
-        ariaLabel: el.getAttribute('aria-label'),
-        placeholder: el.getAttribute('placeholder'),
-        dataId: el.getAttribute('data-id'),
-        classes: el.className.slice(0, 60),
-      }))
-    );
-    console.error('  Textarea details:', JSON.stringify(taInfo, null, 2));
-    console.error('  ── END DEBUG INFO ──\n');
-
-    throw new Error(
-      'Could not find the Copilot chat input. See debug info above.'
-    );
-  }
+  // Find the chat input across all frames
+  const { frame, input } = await findCopilotInput(page);
 
   // Count existing messages before sending
   const messageContainerSelectors = [
