@@ -20,7 +20,6 @@ const EDGE_USER_DATA = path.join(
   'AppData', 'Local', 'Microsoft', 'Edge', 'User Data',
 );
 const SETTINGS_FILE = path.resolve(__dirname, '.test-settings.json');
-const EDGE_PROFILE_COPY = path.join(os.tmpdir(), 'pw-edge-profile');
 
 // ---------- types ----------
 interface EdgeProfile {
@@ -72,19 +71,10 @@ function discoverProfiles(): EdgeProfile[] {
   return profiles;
 }
 
-function copyProfile(profileDir: string) {
+function validateProfile(profileDir: string) {
   const src = path.join(EDGE_USER_DATA, profileDir);
   if (!fs.existsSync(src)) {
     throw new Error(`Edge profile "${profileDir}" not found at ${src}`);
-  }
-  if (fs.existsSync(EDGE_PROFILE_COPY)) {
-    fs.rmSync(EDGE_PROFILE_COPY, { recursive: true, force: true });
-  }
-  fs.mkdirSync(EDGE_PROFILE_COPY, { recursive: true });
-  fs.cpSync(src, path.join(EDGE_PROFILE_COPY, profileDir), { recursive: true });
-  const localState = path.join(EDGE_USER_DATA, 'Local State');
-  if (fs.existsSync(localState)) {
-    fs.copyFileSync(localState, path.join(EDGE_PROFILE_COPY, 'Local State'));
   }
 }
 
@@ -146,7 +136,7 @@ async function globalSetup() {
   if (edgeProfile) {
     console.log(`\n→ D365 URL : ${d365Url}`);
     console.log(`→ Profile  : ${edgeProfile}`);
-    copyProfile(edgeProfile);
+    validateProfile(edgeProfile);
   } else {
     console.log(`\n→ D365 URL : ${d365Url}`);
     console.log('→ Profile  : none (using auth-state.json fallback)');

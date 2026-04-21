@@ -17,7 +17,7 @@ try {
 
 const D365_URL = savedSettings.d365Url || process.env.D365_URL || 'https://REPLACE_WITH_YOUR_ORG.crm.dynamics.com';
 const EDGE_PROFILE = savedSettings.edgeProfile || '';
-const EDGE_PROFILE_COPY = path.join(os.tmpdir(), 'pw-edge-profile');
+const EDGE_USER_DATA = path.join(os.homedir(), 'AppData', 'Local', 'Microsoft', 'Edge', 'User Data');
 const RESPONSE_TIMEOUT = parseInt(process.env.COPILOT_RESPONSE_TIMEOUT || '60', 10) * 1000;
 const SIMILARITY_THRESHOLD = parseFloat(process.env.SIMILARITY_THRESHOLD || '0.6');
 
@@ -250,7 +250,7 @@ test('D365 Copilot prompt regression test', async ({ page: defaultPage, browser 
   if (EDGE_PROFILE) {
     console.log(`Launching Edge with profile: ${EDGE_PROFILE}\n`);
     persistentContext = await chromium.launchPersistentContext(
-      EDGE_PROFILE_COPY,
+      EDGE_USER_DATA,
       {
         channel: 'msedge',
         headless: false,
