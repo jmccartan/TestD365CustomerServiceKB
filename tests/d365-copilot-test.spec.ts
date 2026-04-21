@@ -291,8 +291,35 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
     { timeout: RESPONSE_TIMEOUT }
   );
 
-  // Small delay for streaming to finish
-  await page.waitForTimeout(3000);
+  // Wait for the response to finish streaming — keep checking until the
+  // last message text stabilizes (no changes for 3 seconds)
+  let lastText = '';
+  let stableCount = 0;
+  while (stableCount < 3) {
+    await page.waitForTimeout(1000);
+    const currentText = await frame.locator(messageSelector).last().innerText().catch(() => '');
+    if (currentText === lastText && currentText.length > 0) {
+      stableCount++;
+    } else {
+      stableCount = 0;
+      lastText = currentText;
+    }
+  }
+
+  // Also check for any typing/loading indicators to disappear
+  const typingSelectors = [
+    '[class*="typing"]',
+    '[class*="loading"]',
+    '[class*="spinner"]',
+    '[aria-label*="typing"]',
+    '[aria-label*="Thinking"]',
+  ];
+  for (const sel of typingSelectors) {
+    const indicator = frame.locator(sel).first();
+    if (await indicator.isVisible({ timeout: 500 }).catch(() => false)) {
+      await indicator.waitFor({ state: 'hidden', timeout: RESPONSE_TIMEOUT }).catch(() => {});
+    }
+  }
 
   // Grab the last bot message
   const messages = frame.locator(messageSelector);
