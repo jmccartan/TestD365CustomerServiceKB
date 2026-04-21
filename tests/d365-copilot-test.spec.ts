@@ -377,27 +377,34 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
   await page.goto(D365_URL, { waitUntil: 'load', timeout: 120_000 });
   await page.waitForTimeout(5000);
 
-  // Pause — let the user navigate to Customer Service workspace and open Copilot
+  // Try to open Copilot panel (may already be open)
+  await openCopilotPanel(page);
+  await page.waitForTimeout(3000);
+
+  // Dismiss any popups (microphone permission, "A copilot for you", etc.)
+  await dismissPopups(page);
+
+  // Pause — let the user verify the page is ready
   console.log('');
   console.log('  ┌──────────────────────────────────────────────────────┐');
   console.log('  │  Browser is open.                                    │');
   console.log('  │                                                      │');
   console.log('  │  1. Navigate to the Customer Service workspace       │');
   console.log('  │  2. Make sure the Copilot side panel is open         │');
-  console.log('  │  3. Click the START TESTS button in the browser      │');
+  console.log('  │  3. Click the button in the browser when ready       │');
   console.log('  │                                                      │');
   console.log('  │  The URL will be saved automatically for next run.   │');
   console.log('  └──────────────────────────────────────────────────────┘');
   console.log('');
 
-  // Inject a floating "Start Tests" button and wait for the user to click it
+  // Inject a floating button and wait for the user to click it
   await page.evaluate(() => {
     const btn = document.createElement('button');
     btn.id = 'pw-start-tests';
-    btn.textContent = '▶  START TESTS';
+    btn.textContent = '▶  Before starting tests, ensure the page is ready';
     btn.style.cssText = `
       position: fixed; top: 10px; right: 10px; z-index: 999999;
-      padding: 16px 32px; font-size: 18px; font-weight: bold;
+      padding: 16px 32px; font-size: 16px; font-weight: bold;
       background: #107c10; color: white; border: none; border-radius: 8px;
       cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
     `;
@@ -423,11 +430,7 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
     } catch { /* ignore */ }
   }
 
-  // Try to open Copilot panel (may already be open)
-  await openCopilotPanel(page);
-  await page.waitForTimeout(3000);
-
-  // Dismiss any popups (microphone permission, "A copilot for you", etc.)
+  // Dismiss any new popups that appeared while waiting
   await dismissPopups(page);
 
   const results: TestResult[] = [];
