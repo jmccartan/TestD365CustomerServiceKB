@@ -1,6 +1,5 @@
-import { test, expect, Page, chromium } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 import * as path from 'path';
-import * as os from 'os';
 import ExcelJS from 'exceljs';
 
 // ============================================================
@@ -10,14 +9,13 @@ import ExcelJS from 'exceljs';
 import * as fs from 'fs';
 
 const SETTINGS_FILE = path.resolve(__dirname, '..', '.test-settings.json');
-let savedSettings: { d365Url: string; edgeProfile: string } = { d365Url: '', edgeProfile: '' };
+let savedUrl = '';
 try {
-  savedSettings = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8'));
+  const s = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8'));
+  savedUrl = s.d365Url || '';
 } catch { /* use fallback */ }
 
-const D365_URL = savedSettings.d365Url || process.env.D365_URL || 'https://REPLACE_WITH_YOUR_ORG.crm.dynamics.com';
-const EDGE_PROFILE = savedSettings.edgeProfile || '';
-const EDGE_PROFILE_COPY = path.join(os.tmpdir(), 'pw-edge-profile');
+const D365_URL = savedUrl || process.env.D365_URL || 'https://REPLACE_WITH_YOUR_ORG.crm.dynamics.com';
 const RESPONSE_TIMEOUT = parseInt(process.env.COPILOT_RESPONSE_TIMEOUT || '60', 10) * 1000;
 const SIMILARITY_THRESHOLD = parseFloat(process.env.SIMILARITY_THRESHOLD || '0.6');
 
@@ -238,81 +236,54 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
 // TEST
 // ============================================================
 
-test('D365 Copilot prompt regression test', async ({ page: defaultPage, browser }) => {
+test('D365 Copilot prompt regression test', async ({ page }) => {
   const prompts = await readPrompts();
   console.log(`\nLoaded ${prompts.length} prompts from: ${INPUT_XLSX}\n`);
 
-  // If an Edge profile is configured, launch a persistent context
-  // (Playwright requires launchPersistentContext for user-data-dir)
-  let page: Page;
-  let persistentContext: Awaited<ReturnType<typeof chromium.launchPersistentContext>> | null = null;
+  // Navigate to D365
+  await page.goto(D365_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  await page.waitForTimeout(5000);
 
-  if (EDGE_PROFILE) {
-    console.log(`Launching Edge with profile: ${EDGE_PROFILE}\n`);
-    persistentContext = await chromium.launchPersistentContext(
-      EDGE_PROFILE_COPY,
-      {
-        channel: 'msedge',
-        headless: false,
-        viewport: { width: 1920, height: 1080 },
-        args: [`--profile-directory=${EDGE_PROFILE}`],
-      },
-    );
-    page = persistentContext.pages()[0] || await persistentContext.newPage();
-  } else {
-    page = defaultPage;
-  }
+  // Open Copilot panel
+  await openCopilotPanel(page);
+  await page.waitForTimeout(3000);
 
-  try {
-    // Navigate to D365
-    await page.goto(D365_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-    await page.waitForTimeout(5000); // let D365 finish loading
+  const results: TestResult[] = [];
 
-    // Open Copilot panel
-    await openCopilotPanel(page);
-    await page.waitForTimeout(3000);
+  for (let i = 0; i < prompts.length; i++) {
+    const { prompt, expectedResponse, referencedDocs } = prompts[i];
+    console.log(`[${i + 1}/${prompts.length}] Sending: ${prompt.slice(0, 80)}...`);
 
-    const results: TestResult[] = [];
+    let actualResponse = '';
+    let sim = 0;
+    let pass = false;
 
-    for (let i = 0; i < prompts.length; i++) {
-      const { prompt, expectedResponse, referencedDocs } = prompts[i];
-      console.log(`[${i + 1}/${prompts.length}] Sending: ${prompt.slice(0, 80)}...`);
-
-      let actualResponse = '';
-      let sim = 0;
-      let pass = false;
-
-      try {
-        actualResponse = await sendPromptAndGetResponse(page, prompt);
-        sim = similarity(expectedResponse, actualResponse);
-        pass = sim >= SIMILARITY_THRESHOLD;
-        console.log(`  → Similarity: ${(sim * 100).toFixed(1)}% — ${pass ? 'PASS' : 'FAIL'}`);
-      } catch (err: any) {
-        actualResponse = `ERROR: ${err.message}`;
-        console.error(`  → Error: ${err.message}`);
-      }
-
-      results.push({
-        index: i + 1,
-        prompt,
-        expectedResponse,
-        actualResponse,
-        similarity: sim,
-        pass,
-        referencedDocs,
-      });
+    try {
+      actualResponse = await sendPromptAndGetResponse(page, prompt);
+      sim = similarity(expectedResponse, actualResponse);
+      pass = sim >= SIMILARITY_THRESHOLD;
+      console.log(`  → Similarity: ${(sim * 100).toFixed(1)}% — ${pass ? 'PASS' : 'FAIL'}`);
+    } catch (err: any) {
+      actualResponse = `ERROR: ${err.message}`;
+      console.error(`  → Error: ${err.message}`);
     }
 
-    // Write results Excel
-    await writeResults(results);
-    console.log(`\nResults written to: ${OUTPUT_XLSX}`);
-
-    // Summary
-    const passCount = results.filter((r) => r.pass).length;
-    console.log(`\nSummary: ${passCount}/${results.length} passed (threshold: ${SIMILARITY_THRESHOLD * 100}%)\n`);
-  } finally {
-    if (persistentContext) {
-      await persistentContext.close();
-    }
+    results.push({
+      index: i + 1,
+      prompt,
+      expectedResponse,
+      actualResponse,
+      similarity: sim,
+      pass,
+      referencedDocs,
+    });
   }
+
+  // Write results Excel
+  await writeResults(results);
+  console.log(`\nResults written to: ${OUTPUT_XLSX}`);
+
+  // Summary
+  const passCount = results.filter((r) => r.pass).length;
+  console.log(`\nSummary: ${passCount}/${results.length} passed (threshold: ${SIMILARITY_THRESHOLD * 100}%)\n`);
 });

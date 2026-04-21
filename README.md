@@ -5,7 +5,6 @@ Playwright-based test that sends each prompt from `Prompts and Responses.xlsx` t
 ## Prerequisites
 
 - **Node.js** 18+ installed
-- **Microsoft Edge** installed (the test uses your Edge profiles for authentication)
 
 ## Setup
 
@@ -14,12 +13,12 @@ Playwright-based test that sends each prompt from `Prompts and Responses.xlsx` t
    npm install
    ```
 
-2. **Install the Playwright Edge browser driver:**
+2. **Install the Playwright Chromium browser:**
    ```
-   npx playwright install msedge
+   npx playwright install chromium
    ```
 
-That's it — no manual config files to edit. Everything else is handled interactively on first run.
+That's it — authentication and the D365 URL are handled interactively on first run.
 
 ## Running the Test
 
@@ -27,7 +26,7 @@ That's it — no manual config files to edit. Everything else is handled interac
 npx playwright test
 ```
 
-On startup you'll see an interactive setup prompt:
+On first run you'll see an interactive setup:
 
 ```
 ╔══════════════════════════════════════════╗
@@ -36,28 +35,24 @@ On startup you'll see an interactive setup prompt:
 
   Current D365 URL: https://REPLACE_WITH_YOUR_ORG.crm.dynamics.com
   Enter new URL or press Enter to keep:
-
-  Edge profiles found:
-  [1]  Personal  (Default)
-  [2]  Work  (Profile 1)
-  [3]  Demo - admin@contoso.onmicrosoft.com  (Profile 2) ◄ current
-  [0]  Skip — use auth-state.json fallback
-
-  Enter number or press Enter to keep default:
 ```
 
-- **D365 URL** — paste your org's URL (e.g. `https://yourorg.crm.dynamics.com`), or press Enter to keep the current value.
-- **Edge profile** — pick a profile that is already signed in to D365. The test copies it to a temp directory so it won't interfere with your running Edge.
+- **D365 URL** — paste your org's URL (e.g. `https://yourorg.crm.dynamics.com`), or press Enter to keep the saved value.
+- **Login** — if no saved session exists, a Chromium browser opens for you to sign in to D365. Once logged in, press Enter in the terminal. Your session is saved to `auth-state.json` and reused on future runs.
 
-Both choices are saved to `.test-settings.json` so on subsequent runs you can just press Enter twice to reuse them.
+To force a fresh login, delete `auth-state.json` and run the test again.
 
-### Fallback authentication
+### If Chromium is not installed
 
-If you don't want to use an Edge profile, select `[0]` at the profile prompt and instead run:
+The script will exit with a clear message:
 ```
-npx ts-node auth-setup.ts
+  ┌──────────────────────────────────────────────────────┐
+  │  Chromium is not installed!                          │
+  │                                                      │
+  │  Run this command first:                             │
+  │    npx playwright install chromium                   │
+  └──────────────────────────────────────────────────────┘
 ```
-This opens a browser for you to sign in manually. The session is saved to `auth-state.json` and reused on future runs.
 
 ## Customising selectors
 
@@ -70,7 +65,6 @@ The interactive prompts handle most settings, but you can also set these in `.en
 | Variable | Default | Description |
 |---|---|---|
 | `D365_URL` | *(prompted)* | Pre-fills the URL prompt on first run |
-| `EDGE_PROFILE` | *(prompted)* | If set, skips the profile picker and uses this profile directly |
 | `COPILOT_RESPONSE_TIMEOUT` | `60` | Seconds to wait for each Copilot response |
 | `SIMILARITY_THRESHOLD` | `0.6` | 0–1 word-overlap threshold for pass/fail |
 

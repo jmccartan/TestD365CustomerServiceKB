@@ -1,36 +1,23 @@
 /**
  * Global setup — runs once before all tests.
  *
- * Interactive prompts (saved between runs in .test-settings.json):
- *   1. D365 URL — shown with last-used value; press Enter to keep it.
- *   2. Edge profile — numbered list; press Enter to reuse previous choice.
- *
- * If EDGE_PROFILE or D365_URL are set in .env they become the initial
- * defaults but can still be changed interactively.
+ * 1. Prompts for D365 URL (saved between runs).
+ * 2. If no saved auth state, launches Chromium so you can sign in.
+ *    Your session is saved to auth-state.json for future runs.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import * as readline from 'readline';
+import { chromium } from '@playwright/test';
 import 'dotenv/config';
 
-const EDGE_USER_DATA = path.join(
-  os.homedir(),
-  'AppData', 'Local', 'Microsoft', 'Edge', 'User Data',
-);
 const SETTINGS_FILE = path.resolve(__dirname, '.test-settings.json');
-const EDGE_PROFILE_COPY = path.join(os.tmpdir(), 'pw-edge-profile');
+const AUTH_STATE_FILE = path.resolve(__dirname, 'auth-state.json');
 
 // ---------- types ----------
-interface EdgeProfile {
-  directory: string;
-  displayName: string;
-}
-
 interface SavedSettings {
   d365Url: string;
-  edgeProfile: string;  // directory name, or '' for fallback
 }
 
 // ---------- helpers ----------
@@ -43,7 +30,6 @@ function loadSettings(): SavedSettings {
   }
   return {
     d365Url: process.env.D365_URL || 'https://REPLACE_WITH_YOUR_ORG.crm.dynamics.com',
-    edgeProfile: process.env.EDGE_PROFILE?.trim() || '',
   };
 }
 
@@ -57,50 +43,13 @@ function ask(rl: readline.Interface, question: string): Promise<string> {
   });
 }
 
-function discoverProfiles(): EdgeProfile[] {
-  if (!fs.existsSync(EDGE_USER_DATA)) return [];
-  const profiles: EdgeProfile[] = [];
-  for (const entry of fs.readdirSync(EDGE_USER_DATA)) {
-    const prefsPath = path.join(EDGE_USER_DATA, entry, 'Preferences');
-    if (!fs.existsSync(prefsPath)) continue;
-    try {
-      const data = JSON.parse(fs.readFileSync(prefsPath, 'utf-8'));
-      const displayName = data?.profile?.name || entry;
-      profiles.push({ directory: entry, displayName });
-    } catch { /* skip */ }
-  }
-  return profiles;
-}
-
-function prepareProfile(profileDir: string) {
-  const src = path.join(EDGE_USER_DATA, profileDir);
-  if (!fs.existsSync(src)) {
-    throw new Error(`Edge profile "${profileDir}" not found at ${src}`);
-  }
-
-  // Copy the profile to a temp dir so we don't conflict with running Edge.
-  // DPAPI cookie decryption still works because it's tied to the Windows
-  // user account, not the file path.
-  console.log('  Copying Edge profile (this may take a moment)...');
-
-  if (fs.existsSync(EDGE_PROFILE_COPY)) {
-    fs.rmSync(EDGE_PROFILE_COPY, { recursive: true, force: true });
-  }
-  fs.mkdirSync(EDGE_PROFILE_COPY, { recursive: true });
-
-  // Copy the profile subfolder
-  fs.cpSync(src, path.join(EDGE_PROFILE_COPY, profileDir), { recursive: true });
-
-  // Copy Local State (contains the encryption key for cookies)
-  const localState = path.join(EDGE_USER_DATA, 'Local State');
-  if (fs.existsSync(localState)) {
-    fs.copyFileSync(localState, path.join(EDGE_PROFILE_COPY, 'Local State'));
-  }
-
-  // Copy First Run sentinel so Edge doesn't show onboarding
-  const firstRun = path.join(EDGE_USER_DATA, 'First Run');
-  if (fs.existsSync(firstRun)) {
-    fs.copyFileSync(firstRun, path.join(EDGE_PROFILE_COPY, 'First Run'));
+function hasValidAuthState(): boolean {
+  if (!fs.existsSync(AUTH_STATE_FILE)) return false;
+  try {
+    const data = JSON.parse(fs.readFileSync(AUTH_STATE_FILE, 'utf-8'));
+    return data?.cookies?.length > 0 || data?.origins?.length > 0;
+  } catch {
+    return false;
   }
 }
 
@@ -108,6 +57,23 @@ function prepareProfile(profileDir: string) {
 
 async function globalSetup() {
   const saved = loadSettings();
+
+  // ── 0. Check Chromium is installed ───────────────────────
+  const { execSync } = require('child_process');
+  try {
+    execSync('npx playwright browser-versions chromium', { stdio: 'pipe' });
+  } catch {
+    console.error('');
+    console.error('  ┌──────────────────────────────────────────────────────┐');
+    console.error('  │  Chromium is not installed!                          │');
+    console.error('  │                                                      │');
+    console.error('  │  Run this command first:                             │');
+    console.error('  │    npx playwright install chromium                   │');
+    console.error('  └──────────────────────────────────────────────────────┘');
+    console.error('');
+    process.exit(1);
+  }
+
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
   // ── 1. D365 URL ──────────────────────────────────────────
@@ -118,57 +84,38 @@ async function globalSetup() {
   console.log(`\n  Current D365 URL: ${saved.d365Url}`);
   const urlInput = await ask(rl, '  Enter new URL or press Enter to keep: ');
   const d365Url = urlInput.trim() || saved.d365Url;
-
-  // ── 2. Edge profile ──────────────────────────────────────
-  const profiles = discoverProfiles();
-  let edgeProfile = '';
-
-  if (profiles.length > 0) {
-    const savedIndex = profiles.findIndex((p) => p.directory === saved.edgeProfile);
-    const defaultLabel = savedIndex >= 0
-      ? `${profiles[savedIndex].displayName} (${profiles[savedIndex].directory})`
-      : 'none';
-
-    console.log(`\n  ℹ  The selected profile will be copied so Edge can remain open.`);
-    console.log(`     If prompted to sign in, your first login will be remembered.\n`);
-    console.log(`  Edge profiles found:`);
-    profiles.forEach((p, i) => {
-      const marker = p.directory === saved.edgeProfile ? ' ◄ current' : '';
-      console.log(`  [${i + 1}]  ${p.displayName}  (${p.directory})${marker}`);
-    });
-    console.log(`  [0]  Skip — use auth-state.json fallback`);
-    console.log(`\n  Default: ${defaultLabel}`);
-
-    const profileInput = await ask(rl, '  Enter number or press Enter to keep default: ');
-    const num = profileInput.trim() === '' ? -1 : parseInt(profileInput.trim(), 10);
-
-    if (num === -1) {
-      // keep previous
-      edgeProfile = saved.edgeProfile;
-    } else if (num > 0 && num <= profiles.length) {
-      edgeProfile = profiles[num - 1].directory;
-    } else {
-      edgeProfile = '';
-    }
-  }
-
   rl.close();
 
-  // ── Save settings for next run ───────────────────────────
-  const settings: SavedSettings = { d365Url, edgeProfile };
-  saveSettings(settings);
+  // Save for next run
+  saveSettings({ d365Url });
 
-  // ── Apply Edge profile ───────────────────────────────────
-  if (edgeProfile) {
-    console.log(`\n→ D365 URL : ${d365Url}`);
-    console.log(`→ Profile  : ${edgeProfile}`);
-    prepareProfile(edgeProfile);
+  console.log(`\n→ D365 URL: ${d365Url}`);
+
+  // ── 2. Auth check ────────────────────────────────────────
+  if (!hasValidAuthState()) {
+    console.log('\n  No saved login found. Opening browser for you to sign in...');
+    console.log('  Once you are fully logged into D365, press Enter in this terminal.\n');
+
+    const browser = await chromium.launch({ headless: false });
+    const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+    const page = await context.newPage();
+
+    await page.goto(d365Url, { waitUntil: 'domcontentloaded' });
+
+    const rl2 = readline.createInterface({ input: process.stdin, output: process.stdout });
+    await ask(rl2, '  ✅ Press Enter after you have signed in to D365... ');
+    rl2.close();
+
+    await context.storageState({ path: AUTH_STATE_FILE });
+    console.log(`\n  Login saved to ${AUTH_STATE_FILE}`);
+    console.log('  Future runs will skip this step.\n');
+
+    await browser.close();
   } else {
-    console.log(`\n→ D365 URL : ${d365Url}`);
-    console.log('→ Profile  : none (using auth-state.json fallback)');
+    console.log('→ Auth    : using saved login (delete auth-state.json to re-login)');
   }
 
-  console.log('\n  ⏳ Starting tests — Edge will open shortly. This may take');
+  console.log('\n  ⏳ Starting tests — browser will open shortly. This may take');
   console.log('     30–60 seconds to spin up, please be patient...\n');
 }
 
