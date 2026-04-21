@@ -246,23 +246,20 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
   await page.waitForTimeout(5000);
 
   // Pause — let the user navigate to Customer Service workspace and open Copilot
-  console.log('┌─────────────────────────────────────────────────────────────┐');
-  console.log('│  Browser is open.                                          │');
-  console.log('│                                                             │');
-  console.log('│  1. Navigate to the Customer Service workspace              │');
-  console.log('│  2. Make sure the Copilot side panel is open                │');
-  console.log('│  3. Press Enter here when ready — the URL will be saved     │');
-  console.log('│     automatically from the browser address bar.             │');
-  console.log('└─────────────────────────────────────────────────────────────┘');
+  console.log('');
+  console.log('  ┌──────────────────────────────────────────────────────┐');
+  console.log('  │  Browser is open.                                    │');
+  console.log('  │                                                      │');
+  console.log('  │  1. Navigate to the Customer Service workspace       │');
+  console.log('  │  2. Make sure the Copilot side panel is open         │');
+  console.log('  │  3. Click the green RESUME button in the browser     │');
+  console.log('  │     (Playwright toolbar at top of page)              │');
+  console.log('  │                                                      │');
+  console.log('  │  The URL will be saved automatically for next run.   │');
+  console.log('  └──────────────────────────────────────────────────────┘');
+  console.log('');
 
-  const readline = require('readline');
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
-  const askQuestion = (q: string): Promise<string> =>
-    new Promise((resolve) => rl.question(q, (a: string) => resolve(a)));
-
-  await askQuestion('\n  ✅ Press Enter when you are on the correct page... ');
-  rl.close();
+  await page.pause();
 
   // Capture the current URL from the browser and save it for next run
   const currentUrl = page.url();
