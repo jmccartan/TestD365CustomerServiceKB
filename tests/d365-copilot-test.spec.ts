@@ -280,7 +280,7 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
     await page.waitForTimeout(1000);
     currentText = await container.innerText().catch(() => '');
     // Break early if chat limit was hit
-    if (currentText.includes('clear the chat') || currentText.includes('Clear chat')) {
+    if (currentText.includes("It's time to clear the chat")) {
       return 'CHAT_LIMIT_REACHED';
     }
   }
@@ -333,7 +333,8 @@ async function clearChatIfNeeded(page: Page): Promise<boolean> {
   const container = page.locator(COPILOT_CONTAINER_SEL);
   const containerText = await container.innerText().catch(() => '');
 
-  if (!containerText.includes('clear the chat') && !containerText.includes('Clear chat')) {
+  // Only trigger on the specific limit message, not a generic "Clear chat" button
+  if (!containerText.includes("It's time to clear the chat")) {
     return false;
   }
 
