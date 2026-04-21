@@ -135,269 +135,188 @@ interface TestResult {
 // ============================================================
 // D365 COPILOT INTERACTION
 //
-// These selectors target the Copilot side-panel in D365
-// Customer Service. Adjust if your environment differs.
+// The Copilot side-panel in D365 Customer Service uses a Fluent
+// AI EditorInput component: <span role="textbox" aria-label=
+// "Describe what you need">. Messages appear inside the panel's
+// container (not in an iframe).
 // ============================================================
 
-/** Search all frames for the one containing the Copilot chat input */
-async function findCopilotInput(page: Page): Promise<{
-  frame: Page | import('@playwright/test').Frame;
-  input: ReturnType<Page['locator']>;
-}> {
-  // ── Shadow DOM selectors (D365 Copilot uses a <copilot-panel> web component) ──
-  const shadowSelectors = [
-    'copilot-panel >> input[placeholder*="Ask"]',
-    'copilot-panel >> textarea[placeholder*="Ask"]',
-    'copilot-panel >> input[placeholder*="question"]',
-    'copilot-panel >> textarea',
-    'copilot-panel >> input[type="text"]',
-    '[data-testid="copilot-panel"] >> input[placeholder*="Ask"]',
-    '[data-testid="copilot-panel"] >> textarea',
-    '#msdyn_copilot >> input',
-    '#msdyn_copilot >> textarea',
+// The Copilot panel container that holds all Copilot UI
+const COPILOT_CONTAINER_SEL =
+  '[data-id="MscrmControls.CSIntelligence.AICopilotControl_container"]';
+
+/**
+ * Locate the Copilot chat input on the main page.
+ * The D365 Copilot uses a <span role="textbox"> from Fluent AI —
+ * not a <textarea> or <input>.
+ */
+async function findCopilotInput(page: Page): Promise<ReturnType<Page['locator']>> {
+  // Selectors ordered from most specific to least — all on the main page
+  const selectors = [
+    // Fluent AI EditorInput (the actual D365 Copilot input)
+    `${COPILOT_CONTAINER_SEL} [role="textbox"][aria-label="Describe what you need"]`,
+    `${COPILOT_CONTAINER_SEL} [role="textbox"]`,
+    `${COPILOT_CONTAINER_SEL} [class*="EditorInput"] [role="textbox"]`,
+    // Fallback: any textbox-like element inside the Copilot container
+    `${COPILOT_CONTAINER_SEL} textarea`,
+    `${COPILOT_CONTAINER_SEL} input[type="text"]`,
+    `${COPILOT_CONTAINER_SEL} [contenteditable="true"]`,
   ];
 
-  // Regular DOM selectors (ordered from most specific to least)
-  const regularSelectors = [
-    'div[class*="CopilotRoot"] textarea',
-    'textarea[aria-label="Type your message"]',
-    'textarea[aria-label*="Type your message"]',
-    'textarea[aria-label*="Ask a question"]',
-    'textarea[aria-label*="Ask Copilot"]',
-    'textarea[data-id*="copilot"]',
-    'input[placeholder*="Ask a question"]',
-    'input[placeholder*="Ask Copilot"]',
-    '[data-id="webchat-sendbox-input"]',
-    'textarea[data-id="webchat-sendbox-input"]',
-    'input[data-id="webchat-sendbox-input"]',
-    'textarea[placeholder*="Ask"]',
-    'textarea[placeholder*="Type"]',
-    'textarea[placeholder*="message"]',
-    'textarea[role="textbox"]',
-    'div[contenteditable="true"][aria-label*="message"]',
-    'div[contenteditable="true"][aria-label*="Message"]',
-    'div[contenteditable="true"][data-id*="copilot"]',
-  ];
-
-  const allSelectors = [...shadowSelectors, ...regularSelectors];
-
-  // Search the main page and every iframe
-  const framesToCheck: Array<Page | import('@playwright/test').Frame> = [page, ...page.frames()];
-
-  for (const frame of framesToCheck) {
-    for (const sel of allSelectors) {
-      try {
-        const loc = frame.locator(sel).first();
-        if (await loc.isVisible({ timeout: 1000 }).catch(() => false)) {
-          const frameUrl = 'url' in frame ? (frame as any).url() : page.url();
-          console.log(`  Found input (${sel}) in frame: ${String(frameUrl).slice(0, 80)}`);
-          return { frame, input: loc };
-        }
-      } catch { /* skip */ }
+  for (const sel of selectors) {
+    const loc = page.locator(sel).first();
+    if (await loc.isVisible({ timeout: 2000 }).catch(() => false)) {
+      console.log(`  Found Copilot input: ${sel}`);
+      return loc;
     }
   }
 
-  // Last resort: find any visible textarea or contenteditable in any frame
-  for (const frame of framesToCheck) {
-    try {
-      const taCount = await frame.locator('textarea').count();
-      for (let i = 0; i < taCount; i++) {
-        const ta = frame.locator('textarea').nth(i);
-        if (await ta.isVisible({ timeout: 500 }).catch(() => false)) {
-          const frameUrl = 'url' in frame ? (frame as any).url() : page.url();
-          console.log(`  Found generic textarea in frame: ${String(frameUrl).slice(0, 80)}`);
-          return { frame, input: ta };
-        }
-      }
-      const ceCount = await frame.locator('div[contenteditable="true"]').count();
-      for (let i = 0; i < ceCount; i++) {
-        const ce = frame.locator('div[contenteditable="true"]').nth(i);
-        if (await ce.isVisible({ timeout: 500 }).catch(() => false)) {
-          const frameUrl = 'url' in frame ? (frame as any).url() : page.url();
-          console.log(`  Found contenteditable div in frame: ${String(frameUrl).slice(0, 80)}`);
-          return { frame, input: ce };
-        }
-      }
-    } catch { /* skip */ }
-  }
-
-  // Dump comprehensive debug info
-  console.error('\n  ── SELECTOR DEBUG INFO ──');
-  console.error(`  Page URL: ${page.url()}`);
-  console.error(`  Total frames: ${page.frames().length}`);
-
-  // Check for shadow DOM hosts on each frame
-  for (const frame of framesToCheck) {
-    const url = 'url' in frame ? (frame as any).url() : page.url();
-    if (String(url).includes('blank.htm')) continue;
-    const taCount = await frame.locator('textarea').count().catch(() => 0);
-    const inputCount = await frame.locator('input').count().catch(() => 0);
-    const ceCount = await frame.locator('div[contenteditable="true"]').count().catch(() => 0);
-
-    // Check for shadow DOM hosts
-    const shadowHosts = await frame.evaluate(() => {
-      const hosts: string[] = [];
-      document.querySelectorAll('*').forEach((el) => {
-        if (el.shadowRoot) {
-          hosts.push(`<${el.tagName.toLowerCase()} id="${el.id}" class="${el.className}">`);
-        }
+  // Debug: dump what's in the container
+  console.error('\n  ── COPILOT INPUT DEBUG ──');
+  const container = page.locator(COPILOT_CONTAINER_SEL);
+  const exists = await container.count().catch(() => 0);
+  console.error(`  Container exists: ${exists > 0}`);
+  if (exists > 0) {
+    const els = await container.evaluate((el) => {
+      const results: string[] = [];
+      el.querySelectorAll('[role="textbox"], textarea, input, [contenteditable]').forEach((e) => {
+        const r = e.getBoundingClientRect();
+        results.push(
+          `<${e.tagName.toLowerCase()} role="${e.getAttribute('role')}" ` +
+          `aria-label="${e.getAttribute('aria-label')}" ` +
+          `visible=${r.width > 0 && r.height > 0}>`
+        );
       });
-      return hosts;
-    }).catch(() => [] as string[]);
-
-    console.error(`\n  Frame: ${String(url).slice(0, 100)}`);
-    console.error(`    textareas: ${taCount}, inputs: ${inputCount}, contenteditable: ${ceCount}`);
-    if (shadowHosts.length > 0) {
-      console.error(`    Shadow DOM hosts: ${JSON.stringify(shadowHosts)}`);
-    }
-    if (taCount > 0) {
-      const taInfo = await frame.locator('textarea').evaluateAll((els) =>
-        els.map((el) => ({
-          visible: el.offsetParent !== null,
-          ariaLabel: el.getAttribute('aria-label') || '(none)',
-          placeholder: el.getAttribute('placeholder') || '(none)',
-          dataId: el.getAttribute('data-id') || '(none)',
-        }))
-      ).catch(() => []);
-      console.error('    textareas:', JSON.stringify(taInfo));
-    }
+      return results;
+    }).catch(() => []);
+    console.error(`  Input-like elements:`, els);
   }
-  console.error('  ── END DEBUG INFO ──\n');
+  console.error('  ── END DEBUG ──\n');
 
-  throw new Error('Could not find the Copilot chat input in any frame.');
+  throw new Error('Could not find the Copilot chat input.');
 }
 
+/**
+ * Ensure the Copilot side panel is open by clicking the Copilot
+ * tab button if the panel container is not yet visible.
+ */
 async function openCopilotPanel(page: Page) {
-  const copilotButtonSelectors = [
-    'button[aria-label*="Copilot"]',
-    'button[title*="Copilot"]',
-    '[data-id="msdyn_copilot"]',
-    'button:has-text("Copilot")',
-    '[data-id*="copilot" i]',
-  ];
+  // Check if Copilot panel is already visible
+  const container = page.locator(COPILOT_CONTAINER_SEL);
+  if (await container.isVisible({ timeout: 3000 }).catch(() => false)) {
+    console.log('  Copilot panel already open');
+    return;
+  }
 
-  for (const selector of copilotButtonSelectors) {
-    const btn = page.locator(selector).first();
-    if (await btn.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await btn.click();
-      await page.waitForTimeout(2000);
-      return;
-    }
+  // Click the Copilot side-pane tab button
+  const tabButton = page.locator(
+    '[data-id*="sidepane-tab-button-AppSidePane_MscrmControls.CSIntelligence.AICopilotControl"] button'
+  ).first();
+  if (await tabButton.isVisible({ timeout: 5000 }).catch(() => false)) {
+    await tabButton.click();
+    console.log('  Clicked Copilot tab button');
+    await page.waitForTimeout(2000);
+    return;
+  }
+
+  // Fallback: generic Copilot button
+  const copilotBtn = page.locator('button[aria-label="Copilot"]').first();
+  if (await copilotBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await copilotBtn.click();
+    console.log('  Clicked Copilot button');
+    await page.waitForTimeout(2000);
+    return;
   }
 
   console.warn('  Could not find Copilot button — panel may already be open.');
 }
 
+/**
+ * Send a prompt to the Copilot panel and capture the response.
+ *
+ * Strategy:
+ *  1. Snapshot all text in the Copilot container before sending.
+ *  2. Type the prompt into the Fluent EditorInput and click Send.
+ *  3. Wait for new text to appear (the response).
+ *  4. Wait for the response to stabilize (stop changing).
+ *  5. Return only the NEW text that appeared after sending.
+ */
 async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<string> {
-  // Find the chat input across all frames
-  const { frame, input } = await findCopilotInput(page);
+  const container = page.locator(COPILOT_CONTAINER_SEL);
 
-  // Count existing messages before sending
-  const messageContainerSelectors = [
-    'div[class*="CopilotResponse"]',
-    '[data-content="message-body"]',
-    '.webchat__bubble__content',
-    '[class*="message-content"]',
-    '.ac-textBlock',
-    '[role="listitem"]',
-    '[role="log"] [role="group"]',
-    // Fallback: any div that looks like a chat message
-    '[class*="chat-message"]',
-    '[class*="bot-message"]',
-  ];
+  // Snapshot text before sending
+  const textBefore = await container.innerText().catch(() => '');
 
-  let messageSelector = '';
-  for (const sel of messageContainerSelectors) {
-    const count = await frame.locator(sel).count().catch(() => 0);
-    if (count > 0) {
-      messageSelector = sel;
-      console.log(`  Using message selector: ${sel} (${count} existing)`);
-      break;
-    }
-  }
-
-  // If no message selector found, we'll just wait by time
-  const existingCount = messageSelector
-    ? await frame.locator(messageSelector).count()
-    : 0;
-
-  // Type and send the prompt
+  // Find and populate the input
+  const input = await findCopilotInput(page);
   await input.click();
-  await input.fill(prompt);
-  await input.press('Enter');
 
-  // Wait for a new bot response to appear
-  if (messageSelector) {
-    await frame.waitForFunction(
-      ({ selector, prevCount }) => {
-        const msgs = document.querySelectorAll(selector);
-        return msgs.length > prevCount;
-      },
-      { selector: messageSelector, prevCount: existingCount },
-      { timeout: RESPONSE_TIMEOUT }
-    );
+  // The Fluent EditorInput is a <span role="textbox"> — fill() may not
+  // work, so use pressSequentially() (types character by character) with
+  // a fill() attempt first.
+  try {
+    await input.fill(prompt);
+  } catch {
+    // fill() not supported on this element — type character by character
+    await input.pressSequentially(prompt, { delay: 20 });
+  }
+
+  // Click the Send button (more reliable than pressing Enter on a span)
+  const sendBtn = page.locator(`${COPILOT_CONTAINER_SEL} button[aria-label="Send"]`).first();
+  if (await sendBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await sendBtn.click();
+    console.log('  Clicked Send button');
   } else {
-    // No message selector found — just wait a fixed time
-    console.log('  No message selector found — waiting for response by time...');
-    await page.waitForTimeout(RESPONSE_TIMEOUT / 2);
+    // Fallback: press Enter
+    await input.press('Enter');
+    console.log('  Pressed Enter (Send button not found)');
   }
 
-  // Wait for the response to finish streaming — keep checking until the
-  // last message text stabilizes (no changes for 3 seconds).
-  // Cap at 90 seconds to avoid hanging forever.
-  if (messageSelector) {
-    let lastText = '';
-    let stableCount = 0;
-    const stabilityDeadline = Date.now() + 90_000;
-    while (stableCount < 3 && Date.now() < stabilityDeadline) {
-      await page.waitForTimeout(1000);
-      const currentText = await frame.locator(messageSelector).last().innerText().catch(() => '');
-      if (currentText === lastText && currentText.length > 0) {
-        stableCount++;
-      } else {
-        stableCount = 0;
-        lastText = currentText;
-      }
+  // Wait for the container text to change (new response appeared)
+  console.log('  Waiting for response...');
+  const responseDeadline = Date.now() + RESPONSE_TIMEOUT;
+  let currentText = textBefore;
+  while (currentText === textBefore && Date.now() < responseDeadline) {
+    await page.waitForTimeout(1000);
+    currentText = await container.innerText().catch(() => '');
+  }
+
+  if (currentText === textBefore) {
+    return 'ERROR: No response appeared within timeout.';
+  }
+
+  // Wait for the response to finish streaming — text must stabilize
+  // (no changes for 3 consecutive seconds), capped at 90s.
+  let lastText = currentText;
+  let stableCount = 0;
+  const stabilityDeadline = Date.now() + 90_000;
+  while (stableCount < 3 && Date.now() < stabilityDeadline) {
+    await page.waitForTimeout(1000);
+    currentText = await container.innerText().catch(() => '');
+    if (currentText === lastText) {
+      stableCount++;
+    } else {
+      stableCount = 0;
+      lastText = currentText;
     }
   }
 
-  // Also check for any typing/loading indicators to disappear
-  const typingSelectors = [
-    '[class*="typing"]',
-    '[class*="loading"]',
-    '[class*="spinner"]',
-    '[aria-label*="typing"]',
-    '[aria-label*="Thinking"]',
-  ];
-  for (const sel of typingSelectors) {
-    const indicator = frame.locator(sel).first();
-    if (await indicator.isVisible({ timeout: 500 }).catch(() => false)) {
-      await indicator.waitFor({ state: 'hidden', timeout: RESPONSE_TIMEOUT }).catch(() => {});
-    }
+  // Extract only the new text (response) by removing the pre-send content.
+  // The container text is structured: existing messages + new prompt echo + response.
+  // We grab everything after the last occurrence of the prompt.
+  const fullText = currentText;
+  const promptIdx = fullText.lastIndexOf(prompt);
+  if (promptIdx !== -1) {
+    const afterPrompt = fullText.slice(promptIdx + prompt.length).trim();
+    if (afterPrompt.length > 0) return afterPrompt;
   }
 
-  // Grab the last bot message
-  if (messageSelector) {
-    const messages = frame.locator(messageSelector);
-    const lastMessage = messages.last();
-    const responseText = await lastMessage.innerText();
-    return responseText.trim();
+  // Fallback: return the delta between before and after
+  if (fullText.length > textBefore.length) {
+    return fullText.slice(textBefore.length).trim();
   }
 
-  // Fallback: try to get the last visible text block in the Copilot area
-  const fallbackSelectors = [
-    'div[class*="CopilotResponse"]',
-    'div[class*="CopilotRoot"] div[class*="message"]',
-    '[role="log"]',
-  ];
-  for (const sel of fallbackSelectors) {
-    const el = frame.locator(sel).last();
-    if (await el.isVisible({ timeout: 1000 }).catch(() => false)) {
-      return (await el.innerText()).trim();
-    }
-  }
-
-  return 'ERROR: Could not capture response — message selector not found.';
+  return fullText.trim();
 }
 
 // ============================================================
@@ -409,23 +328,23 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
  * Much more reliable than networkidle for a heavy SPA like D365.
  */
 async function waitForD365Ready(page: Page) {
-  // 1. Wait for the app shell container (indicates D365 frame loaded)
-  console.log('  Waiting for D365 app shell...');
-  await page.locator('#shell-container').waitFor({ state: 'visible', timeout: 120_000 });
-  console.log('  ✓ App shell visible');
+  // 1. Wait for the navigation breadcrumb (indicates the D365 SPA has rendered)
+  console.log('  Waiting for D365 app to load...');
+  await page.locator('[data-id="appBreadCrumb"]')
+    .waitFor({ state: 'visible', timeout: 120_000 });
+  console.log('  ✓ App navigation loaded');
 
-  // 2. Wait for the Copilot panel control to be present in the DOM
-  console.log('  Waiting for Copilot control...');
-  await page.locator('[data-id="MscrmControls.CSIntelligence.AICopilotControl_container"]')
+  // 2. Wait for the Copilot panel container to be present
+  console.log('  Waiting for Copilot panel...');
+  await page.locator(COPILOT_CONTAINER_SEL)
     .waitFor({ state: 'attached', timeout: 60_000 });
-  console.log('  ✓ Copilot control attached');
 
-  // 3. Wait for the Copilot pane container to be visible
-  console.log('  Waiting for Copilot pane...');
-  await page.locator('[data-id*="pane-container-AppSidePane_MscrmControls.CSIntelligence.AICopilotControl"]')
-    .waitFor({ state: 'visible', timeout: 30_000 })
-    .catch(() => console.log('  Copilot pane not auto-visible — may need to click Copilot button'));
-  console.log('  ✓ Copilot pane ready');
+  // 3. Wait for the Copilot panel to finish loading (has interactive content,
+  //    not just skeleton placeholders). Poll until we see the textbox input.
+  console.log('  Waiting for Copilot panel content...');
+  const textbox = page.locator(`${COPILOT_CONTAINER_SEL} [role="textbox"]`);
+  await textbox.waitFor({ state: 'visible', timeout: 60_000 });
+  console.log('  ✓ Copilot panel ready');
 }
 
 /**
