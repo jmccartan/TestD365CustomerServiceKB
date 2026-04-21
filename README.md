@@ -4,7 +4,24 @@ Playwright-based test that sends each prompt from `Prompts and Responses.xlsx` t
 
 ## Prerequisites
 
-- **Node.js** 18+ installed
+- **Node.js** 18+ (LTS recommended)
+
+### Installing Node.js
+
+If you don't have Node.js installed, pick one of these options:
+
+| Method | Command / Link |
+|---|---|
+| **Windows installer** (easiest) | Download from [nodejs.org](https://nodejs.org/) — choose the LTS version and run the `.msi` installer. |
+| **winget** (Windows) | `winget install OpenJS.NodeJS.LTS` |
+| **Homebrew** (macOS) | `brew install node@20` |
+| **nvm** (any OS) | Install [nvm](https://github.com/nvm-sh/nvm), then `nvm install --lts` |
+
+After installing, verify with:
+```
+node --version   # should show v18+ (e.g. v20.x or v24.x)
+npm --version    # should show 9+
+```
 
 ## Setup
 
@@ -70,7 +87,7 @@ The interactive prompts handle most settings, but you can also set these in `.en
 
 ## Output
 
-Results are saved to `Test Results YYYY-MM-DD.xlsx` with these columns:
+Results are saved to `Test Results YYYY-MM-DD_HH-MM-SS.xlsx` with these columns:
 
 | Column | Description |
 |---|---|
@@ -81,5 +98,6 @@ Results are saved to `Test Results YYYY-MM-DD.xlsx` with these columns:
 | **Similarity** | Word-overlap percentage |
 | **Result** | PASS (green) or FAIL (red) |
 | **Referenced Docs** | From the source spreadsheet |
+| **Cited Sources** | KB articles cited by Copilot (from "Check sources") |
 
 A summary row at the bottom shows total pass/fail counts.
