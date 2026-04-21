@@ -456,9 +456,11 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
   console.log(`Navigating to: ${D365_URL}\n`);
   await page.goto(D365_URL, { waitUntil: 'load', timeout: 120_000 });
 
-  // Wait for D365 to fully load — popups take time to appear
+  // Wait for D365 to fully initialize (no network activity for 2s)
   console.log('  Waiting for page to fully load...\n');
-  await page.waitForTimeout(10000);
+  await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(() => {
+    console.log('  Network did not fully idle — continuing anyway.');
+  });
 
   // Try to open Copilot panel (may already be open)
   await openCopilotPanel(page);
