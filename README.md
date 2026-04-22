@@ -2,7 +2,7 @@
 
 An automated regression-testing tool for **Dynamics 365 Customer Service Copilot** knowledge bases. It lets you define a set of "golden" prompts with expected answers, then runs them against your live Copilot instance and reports how well each response matches.
 
-**Why this exists:** When you add, update, or reorganise articles in a D365 Customer Service knowledge base, there's no built-in way to verify that Copilot still answers key questions correctly. This tool fills that gap — you author a spreadsheet of prompts and expected responses, run the test, and get a colour-coded Excel report showing pass/fail for every prompt, the actual Copilot response, and which KB articles were cited.
+**Why this exists:** When articles in a D365 Customer Service knowledge base are added, updated, or reorganized, it can be difficult to confirm that Copilot still answers key questions as expected. This tool aims to help with that — you provide a spreadsheet of prompts and expected responses, run the test, and review a color-coded Excel report showing pass/fail for every prompt, the actual Copilot response, and which KB articles were cited.
 
 ### How it works
 
