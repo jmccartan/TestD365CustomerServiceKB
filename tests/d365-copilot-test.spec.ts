@@ -275,31 +275,56 @@ async function sendPromptAndGetResponse(page: Page, prompt: string): Promise<str
     console.log('  Pressed Enter (Send button not found)');
   }
 
+  // Known Copilot loading/thinking indicator phrases that appear before
+  // the real response. We must wait past these.
+  const LOADING_PHRASES = [
+    'Getting answers for you',
+    'Searching for an answer',
+    'Working on it',
+    'Generating a response',
+    'Looking that up',
+  ];
+
+  function isLoadingText(text: string): boolean {
+    return LOADING_PHRASES.some((phrase) => text.includes(phrase));
+  }
+
   // Wait for the container text to change (new response appeared)
   console.log('  Waiting for response...');
   const responseDeadline = Date.now() + RESPONSE_TIMEOUT;
   let currentText = textBefore;
-  while (currentText === textBefore && Date.now() < responseDeadline) {
+  while (Date.now() < responseDeadline) {
     await page.waitForTimeout(1000);
     currentText = await container.innerText().catch(() => '');
     // Break early if chat limit was hit
     if (currentText.includes("It's time to clear the chat")) {
       return 'CHAT_LIMIT_REACHED';
     }
+    // Keep waiting if the text hasn't changed or is just a loading indicator
+    if (currentText !== textBefore && !isLoadingText(currentText)) {
+      break;
+    }
   }
 
-  if (currentText === textBefore) {
+  if (currentText === textBefore || isLoadingText(currentText)) {
     return 'ERROR: No response appeared within timeout.';
   }
 
   // Wait for the response to finish streaming — text must stabilize
   // (no changes for 3 consecutive seconds), capped at 90s.
+  // Also ensure we're not stabilizing on a loading indicator.
   let lastText = currentText;
   let stableCount = 0;
   const stabilityDeadline = Date.now() + 90_000;
   while (stableCount < 3 && Date.now() < stabilityDeadline) {
     await page.waitForTimeout(1000);
     currentText = await container.innerText().catch(() => '');
+    // Reset stability if still showing loading indicator
+    if (isLoadingText(currentText)) {
+      stableCount = 0;
+      lastText = currentText;
+      continue;
+    }
     if (currentText === lastText) {
       stableCount++;
     } else {
