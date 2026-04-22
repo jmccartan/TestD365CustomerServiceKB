@@ -1,6 +1,18 @@
-# D365 Customer Service Copilot Test
+# D365 Customer Service Copilot KB Test Harness
 
-Playwright-based test that sends each prompt from `Prompts and Responses.xlsx` to the D365 Customer Service Copilot, captures the response, compares it against the expected answer, and writes results to a new Excel file.
+An automated regression-testing tool for **Dynamics 365 Customer Service Copilot** knowledge bases. It lets you define a set of "golden" prompts with expected answers, then runs them against your live Copilot instance and reports how well each response matches.
+
+**Why this exists:** When you add, update, or reorganise articles in a D365 Customer Service knowledge base, there's no built-in way to verify that Copilot still answers key questions correctly. This tool fills that gap — you author a spreadsheet of prompts and expected responses, run the test, and get a colour-coded Excel report showing pass/fail for every prompt, the actual Copilot response, and which KB articles were cited.
+
+### How it works
+
+1. Opens a Chromium browser and signs in to your D365 Customer Service workspace.
+2. Reads prompts from `Prompts and Responses.xlsx`.
+3. Sends each prompt to the Copilot side-panel, waits for the response to finish streaming, then expands "Check sources" to capture which KB articles were cited.
+4. Compares the actual response to the expected answer using word-overlap similarity.
+5. Writes a timestamped Excel report with pass/fail results, similarity scores, and cited sources.
+
+The tool automatically handles D365's 15-message conversation limit by clearing the chat and continuing.
 
 ## Prerequisites
 
@@ -36,6 +48,26 @@ npm --version    # should show 9+
    ```
 
 That's it — authentication and the D365 URL are handled interactively on first run.
+
+## Creating Your Golden Prompts
+
+The test is driven by `Prompts and Responses.xlsx`. This is your "golden" test suite — the questions you expect Copilot to answer correctly based on your knowledge base content.
+
+**Spreadsheet format** (first sheet, or a sheet named "Prompts & Responses"):
+
+| Column A — Prompt | Column B — Expected Response | Column C — Referenced Docs (optional) |
+|---|---|---|
+| What is our return policy? | Customers may return items within 30 days of purchase for a full refund... | Return Policy KB Article |
+| How do I reset my password? | Navigate to Settings > Security > Change Password... | Account Management Guide |
+
+**Tips for writing effective golden prompts:**
+
+- **Cover your critical KB topics** — include at least one prompt per major article or topic area.
+- **Use natural language** — write prompts the way a real agent or customer would ask them, not keyword searches.
+- **Expected responses don't need to be exact** — the tool uses word-overlap similarity (default 60% threshold), so paraphrases will still pass. Focus on including the key terms and facts.
+- **Include edge cases** — add prompts for topics you know are tricky, recently changed, or frequently confused.
+- **Version your spreadsheet** — as your KB evolves, update the golden prompts to match. This is your regression safety net.
+- **Column C is optional** — use it to note which KB article(s) should be the source, so you can cross-reference against the "Cited Sources" column in the results.
 
 ## Running the Test
 
