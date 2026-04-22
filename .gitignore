@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Power Platform Playwright Toolkit (cloned framework)
+.pp-framework/
+
 # Auth state (contains session tokens)
 auth-state.json
 .test-settings.json

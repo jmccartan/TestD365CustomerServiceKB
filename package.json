@@ -4,7 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "npx playwright test",
+    "test:parallel": "npx playwright test --config=playwright-parallel.config.ts",
+    "setup:framework": "node setup-framework.js"
   },
   "keywords": [],
   "author": "",
@@ -16,6 +18,7 @@
   "dependencies": {
     "@playwright/mcp": "^0.0.70",
     "dotenv": "^17.4.2",
-    "exceljs": "^4.4.0"
+    "exceljs": "^4.4.0",
+    "power-platform-playwright-toolkit": "file:.pp-framework/packages/power-platform-playwright-toolkit"
   }
 }

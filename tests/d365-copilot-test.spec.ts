@@ -1,6 +1,14 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, Page, BrowserContext } from '@playwright/test';
 import * as path from 'path';
 import ExcelJS from 'exceljs';
+import {
+  AppProvider,
+  AppType,
+  AppLaunchMode,
+  ModelDrivenAppPage,
+  waitForSpinnerToDisappear,
+  handleDialog,
+} from 'power-platform-playwright-toolkit';
 
 // ============================================================
 // CONFIGURATION — reads from .test-settings.json (set during
@@ -200,41 +208,6 @@ async function findCopilotInput(page: Page): Promise<ReturnType<Page['locator']>
 }
 
 /**
- * Ensure the Copilot side panel is open by clicking the Copilot
- * tab button if the panel container is not yet visible.
- */
-async function openCopilotPanel(page: Page) {
-  // Check if Copilot panel is already visible
-  const container = page.locator(COPILOT_CONTAINER_SEL);
-  if (await container.isVisible({ timeout: 3000 }).catch(() => false)) {
-    console.log('  Copilot panel already open');
-    return;
-  }
-
-  // Click the Copilot side-pane tab button
-  const tabButton = page.locator(
-    '[data-id*="sidepane-tab-button-AppSidePane_MscrmControls.CSIntelligence.AICopilotControl"] button'
-  ).first();
-  if (await tabButton.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await tabButton.click();
-    console.log('  Clicked Copilot tab button');
-    await page.waitForTimeout(2000);
-    return;
-  }
-
-  // Fallback: generic Copilot button
-  const copilotBtn = page.locator('button[aria-label="Copilot"]').first();
-  if (await copilotBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await copilotBtn.click();
-    console.log('  Clicked Copilot button');
-    await page.waitForTimeout(2000);
-    return;
-  }
-
-  console.warn('  Could not find Copilot button — panel may already be open.');
-}
-
-/**
  * Send a prompt to the Copilot panel and capture the response.
  *
  * Strategy:
@@ -419,30 +392,81 @@ async function clearChatIfNeeded(page: Page): Promise<boolean> {
 
 // ============================================================
 // D365 PAGE READINESS & POPUP DISMISSAL
+//
+// Uses the Power Platform Playwright Toolkit (AppProvider +
+// ModelDrivenAppPage) for app launch and SPA readiness, with
+// custom Copilot-specific waits layered on top.
 // ============================================================
 
 /**
- * Wait for the D365 app shell and Copilot panel to be fully rendered.
- * Much more reliable than networkidle for a heavy SPA like D365.
+ * Launch the D365 Customer Service app using the PP Playwright Toolkit.
+ * Handles OAuth redirects, domain transitions, and SPA initialization.
+ * Returns the ModelDrivenAppPage for further navigation if needed.
  */
-async function waitForD365Ready(page: Page) {
-  // 1. Wait for the navigation breadcrumb (indicates the D365 SPA has rendered)
-  console.log('  Waiting for D365 app to load...');
-  await page.locator('[data-id="appBreadCrumb"]')
-    .waitFor({ state: 'visible', timeout: 120_000 });
-  console.log('  ✓ App navigation loaded');
+async function launchD365App(page: Page, context: BrowserContext): Promise<ModelDrivenAppPage> {
+  const app = new AppProvider(page, context);
 
-  // 2. Wait for the Copilot panel container to be present
+  console.log('  Launching D365 via Power Platform Playwright Toolkit...');
+  await app.launch({
+    app: 'Customer Service workspace',
+    type: AppType.ModelDriven,
+    mode: AppLaunchMode.Play,
+    skipMakerPortal: true,
+    directUrl: D365_URL,
+  });
+
+  const mda = app.getModelDrivenAppPage();
+  console.log('  ✓ D365 app launched');
+  return mda;
+}
+
+/**
+ * Wait for the Copilot panel to fully load inside the D365 app.
+ * The framework handles D365 SPA readiness; this adds Copilot-specific waits.
+ */
+async function waitForCopilotReady(page: Page) {
+  // Wait for the Copilot panel container to be present
   console.log('  Waiting for Copilot panel...');
   await page.locator(COPILOT_CONTAINER_SEL)
     .waitFor({ state: 'attached', timeout: 60_000 });
 
-  // 3. Wait for the Copilot panel to finish loading (has interactive content,
-  //    not just skeleton placeholders). Poll until we see the textbox input.
+  // Wait for the Copilot panel to finish loading (textbox visible)
   console.log('  Waiting for Copilot panel content...');
   const textbox = page.locator(`${COPILOT_CONTAINER_SEL} [role="textbox"]`);
   await textbox.waitFor({ state: 'visible', timeout: 60_000 });
   console.log('  ✓ Copilot panel ready');
+}
+
+/**
+ * Ensure the Copilot side panel is open by clicking the Copilot
+ * tab button if the panel container is not yet visible.
+ */
+async function openCopilotPanel(page: Page) {
+  const container = page.locator(COPILOT_CONTAINER_SEL);
+  if (await container.isVisible({ timeout: 3000 }).catch(() => false)) {
+    console.log('  Copilot panel already open');
+    return;
+  }
+
+  const tabButton = page.locator(
+    '[data-id*="sidepane-tab-button-AppSidePane_MscrmControls.CSIntelligence.AICopilotControl"] button'
+  ).first();
+  if (await tabButton.isVisible({ timeout: 5000 }).catch(() => false)) {
+    await tabButton.click();
+    console.log('  Clicked Copilot tab button');
+    await page.waitForTimeout(2000);
+    return;
+  }
+
+  const copilotBtn = page.locator('button[aria-label="Copilot"]').first();
+  if (await copilotBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await copilotBtn.click();
+    console.log('  Clicked Copilot button');
+    await page.waitForTimeout(2000);
+    return;
+  }
+
+  console.warn('  Could not find Copilot button — panel may already be open.');
 }
 
 /**
@@ -511,7 +535,7 @@ async function waitForDialogsToClear(page: Page, timeout = 10_000) {
 // TEST
 // ============================================================
 
-test('D365 Copilot prompt regression test', async ({ page }) => {
+test('D365 Copilot prompt regression test', async ({ page, context }) => {
   // Register dialog handler once to avoid accumulating listeners
   page.on('dialog', async (dialog) => {
     console.log(`  Dismissing dialog: ${dialog.message().slice(0, 60)}`);
@@ -521,15 +545,13 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
   const prompts = await readPrompts();
   console.log(`\nLoaded ${prompts.length} prompts from: ${INPUT_XLSX}\n`);
 
-  // Navigate to D365
+  // Launch D365 via the Power Platform Playwright Toolkit
   console.log(`Navigating to: ${D365_URL}\n`);
-  await page.goto(D365_URL, { waitUntil: 'load', timeout: 120_000 });
+  const mda = await launchD365App(page, context);
 
-  // Wait for D365 SPA to fully render (element-based, not networkidle)
-  await waitForD365Ready(page);
-
-  // Try to open Copilot panel (may already be open)
+  // Open and wait for the Copilot side panel
   await openCopilotPanel(page);
+  await waitForCopilotReady(page);
 
   // Dismiss the "A Copilot for you!" onboarding dialog and any others
   console.log('  Checking for popups...');

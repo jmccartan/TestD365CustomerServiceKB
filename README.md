@@ -37,10 +37,12 @@ npm --version    # should show 9+
 
 ## Setup
 
-1. **Install dependencies:**
+1. **Install dependencies and the Power Platform Playwright Toolkit:**
    ```
    npm install
+   npm run setup:framework
    ```
+   The setup script clones Microsoft's [Power Platform Playwright Samples](https://github.com/microsoft/power-platform-playwright-samples) framework, builds the toolkit, and links it as a local dependency. The framework provides `AppProvider` and `ModelDrivenAppPage` for reliable D365 app launch, OAuth redirect handling, and SPA readiness detection.
 
 2. **Install the Playwright Chromium browser:**
    ```
