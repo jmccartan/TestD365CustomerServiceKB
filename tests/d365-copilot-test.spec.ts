@@ -70,6 +70,134 @@ function similarity(a: string, b: string): number {
   return intersection / Math.max(setA.size, setB.size);
 }
 
+// ============================================================
+// FAILURE CLASSIFICATION (deterministic — no LLM calls)
+// ============================================================
+
+/** Normalize a doc name for comparison (lowercase, trim, strip extension) */
+function normalizeDocName(name: string): string {
+  return name.toLowerCase().replace(/\.(html?|pdf|docx?|aspx?)$/i, '').trim();
+}
+
+/** Parse a comma/semicolon separated doc string into a normalized set */
+function parseDocList(docs: string): Set<string> {
+  if (!docs.trim()) return new Set();
+  return new Set(
+    docs.split(/[,;]/).map(normalizeDocName).filter(Boolean)
+  );
+}
+
+/** Check whether the prompt looks compound (multi-intent heuristic) */
+function isCompoundPrompt(prompt: string): boolean {
+  const lower = prompt.toLowerCase();
+  const compoundIndicators = [' and also ', ' and then ', ' also ', ' as well as ', ' plus '];
+  const multiIntentCount = compoundIndicators.filter((ind) => lower.includes(ind)).length;
+  if (multiIntentCount >= 1) return true;
+  // Count question marks — more than one suggests multiple questions
+  const questionMarks = (prompt.match(/\?/g) || []).length;
+  if (questionMarks > 1) return true;
+  return false;
+}
+
+interface DocComparison {
+  expectedDocCited: boolean;
+  otherDocCited: boolean;
+  noDocCited: boolean;
+}
+
+/** Compare referenced (expected) docs against cited (actual) sources */
+function compareDocSources(referencedDocs: string, citedSources: string): DocComparison {
+  const expected = parseDocList(referencedDocs);
+  const actual = parseDocList(citedSources);
+
+  const noDocCited = actual.size === 0;
+  let expectedDocCited = false;
+
+  if (expected.size > 0 && actual.size > 0) {
+    for (const exp of expected) {
+      for (const act of actual) {
+        if (act.includes(exp) || exp.includes(act)) {
+          expectedDocCited = true;
+          break;
+        }
+      }
+      if (expectedDocCited) break;
+    }
+  }
+
+  const otherDocCited = actual.size > 0 && !expectedDocCited;
+
+  return { expectedDocCited, otherDocCited, noDocCited };
+}
+
+const AUTO_FIX_LABELS: Record<string, string> = {
+  'A': 'Add disambiguation + narrow scope at top of expected page',
+  'B': 'Add "Use this page when / Do not use" dominance block',
+  'C': 'Surface key facts in bullets outside tables',
+  'D': 'Check publish state, role visibility, category',
+  'E': 'Rewrite prompt to single agent task',
+};
+
+/** Classify a failed test result into a failure type and fix recommendation */
+function classifyFailure(r: {
+  similarity: number;
+  pass: boolean;
+  referencedDocs: string;
+  citedSources: string;
+  prompt: string;
+  expectedDocCited: boolean;
+  otherDocCited: boolean;
+  noDocCited: boolean;
+}): { failureType: string; autoFixLabel: string } {
+  if (r.pass) return { failureType: '', autoFixLabel: '' };
+
+  // E — Bad test prompt (check first — compound prompts are often misrouted)
+  if (isCompoundPrompt(r.prompt)) {
+    return {
+      failureType: 'E — Bad test prompt',
+      autoFixLabel: AUTO_FIX_LABELS['E'],
+    };
+  }
+
+  // D — Coverage / indexing gap: zero similarity AND no citations
+  if (r.similarity === 0 && r.noDocCited) {
+    return {
+      failureType: 'D — Coverage / indexing',
+      autoFixLabel: AUTO_FIX_LABELS['D'],
+    };
+  }
+
+  // A — Wrong page won: failed AND cited sources ≠ expected doc
+  if (r.otherDocCited) {
+    return {
+      failureType: 'A — Wrong page won',
+      autoFixLabel: AUTO_FIX_LABELS['A'],
+    };
+  }
+
+  // B — No dominant page: failed AND no cited sources
+  if (r.noDocCited) {
+    return {
+      failureType: 'B — No dominant page',
+      autoFixLabel: AUTO_FIX_LABELS['B'],
+    };
+  }
+
+  // C — Weak surfacing: failed AND expected doc IS in cited sources
+  if (r.expectedDocCited) {
+    return {
+      failureType: 'C — Weak surfacing',
+      autoFixLabel: AUTO_FIX_LABELS['C'],
+    };
+  }
+
+  // Fallback (should not happen if referencedDocs is populated)
+  return {
+    failureType: 'B — No dominant page',
+    autoFixLabel: AUTO_FIX_LABELS['B'],
+  };
+}
+
 /** Write results to a new Excel file */
 async function writeResults(results: TestResult[]) {
   const wb = new ExcelJS.Workbook();
@@ -81,10 +209,15 @@ async function writeResults(results: TestResult[]) {
     { header: 'Prompt', key: 'prompt', width: 60 },
     { header: 'Expected Response', key: 'expected', width: 60 },
     { header: 'Actual Response', key: 'actual', width: 60 },
-    { header: 'Similarity', key: 'similarity', width: 12 },
+    { header: 'Similarity', key: 'similarity', width: 10 },
     { header: 'Result', key: 'result', width: 10 },
     { header: 'Referenced Docs', key: 'docs', width: 30 },
     { header: 'Cited Sources', key: 'citedSources', width: 40 },
+    { header: 'Expected Doc Cited', key: 'expectedDocCited', width: 18 },
+    { header: 'Other Doc Cited', key: 'otherDocCited', width: 16 },
+    { header: 'No Doc Cited', key: 'noDocCited', width: 14 },
+    { header: 'Failure Type', key: 'failureType', width: 25 },
+    { header: 'Recommended Fix', key: 'autoFixLabel', width: 55 },
   ];
 
   // Style header
@@ -101,6 +234,11 @@ async function writeResults(results: TestResult[]) {
       result: r.pass ? 'PASS' : 'FAIL',
       docs: r.referencedDocs,
       citedSources: r.citedSources,
+      expectedDocCited: r.expectedDocCited ? 'Yes' : 'No',
+      otherDocCited: r.otherDocCited ? 'Yes' : 'No',
+      noDocCited: r.noDocCited ? 'Yes' : 'No',
+      failureType: r.failureType,
+      autoFixLabel: r.autoFixLabel,
     });
 
     // Color the result cell green/red
@@ -111,15 +249,46 @@ async function writeResults(results: TestResult[]) {
       fgColor: { argb: r.pass ? 'FF92D050' : 'FFFF4444' },
     };
     resultCell.font = { bold: true, color: { argb: r.pass ? 'FF006100' : 'FF9C0006' } };
+
+    // De-emphasize similarity column — grey text
+    const simCell = row.getCell('similarity');
+    simCell.font = { color: { argb: 'FF999999' } };
+
+    // Highlight failure type for failed rows
+    if (!r.pass && r.failureType) {
+      const ftCell = row.getCell('failureType');
+      ftCell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFFFF2CC' },
+      };
+      ftCell.font = { bold: true };
+    }
   }
 
   // Summary row
   const passCount = results.filter((r) => r.pass).length;
+  const failCount = results.length - passCount;
   ws.addRow({});
   ws.addRow({
     index: '',
-    prompt: `Total: ${results.length}  |  Pass: ${passCount}  |  Fail: ${results.length - passCount}`,
+    prompt: `Total: ${results.length}  |  Pass: ${passCount}  |  Fail: ${failCount}`,
   });
+
+  // Failure type breakdown (only if there are failures)
+  if (failCount > 0) {
+    const typeCounts: Record<string, number> = {};
+    for (const r of results) {
+      if (r.failureType) {
+        typeCounts[r.failureType] = (typeCounts[r.failureType] || 0) + 1;
+      }
+    }
+    ws.addRow({});
+    ws.addRow({ index: '', prompt: 'Failure Breakdown:' });
+    for (const [type, count] of Object.entries(typeCounts).sort()) {
+      ws.addRow({ index: '', prompt: `  ${type}: ${count}` });
+    }
+  }
 
   await wb.xlsx.writeFile(OUTPUT_XLSX);
 }
@@ -133,6 +302,11 @@ interface TestResult {
   pass: boolean;
   referencedDocs: string;
   citedSources: string;
+  expectedDocCited: boolean;
+  otherDocCited: boolean;
+  noDocCited: boolean;
+  failureType: string;
+  autoFixLabel: string;
 }
 
 // ============================================================
@@ -651,6 +825,22 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
       console.error(`  → Error: ${err.message}`);
     }
 
+    // Compute doc comparison and failure classification
+    const docComp = compareDocSources(referencedDocs, citedSources);
+    const partialResult = {
+      similarity: sim,
+      pass,
+      referencedDocs,
+      citedSources,
+      prompt,
+      ...docComp,
+    };
+    const { failureType, autoFixLabel } = classifyFailure(partialResult);
+
+    if (!pass && failureType) {
+      console.log(`  → Classification: ${failureType}`);
+    }
+
     results.push({
       index: i + 1,
       prompt,
@@ -660,6 +850,9 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
       pass,
       referencedDocs,
       citedSources,
+      ...docComp,
+      failureType,
+      autoFixLabel,
     });
   }
 
@@ -669,5 +862,19 @@ test('D365 Copilot prompt regression test', async ({ page }) => {
 
   // Summary
   const passCount = results.filter((r) => r.pass).length;
-  console.log(`\nSummary: ${passCount}/${results.length} passed (threshold: ${SIMILARITY_THRESHOLD * 100}%)\n`);
+  const failCount = results.length - passCount;
+  console.log(`\nSummary: ${passCount}/${results.length} passed (threshold: ${SIMILARITY_THRESHOLD * 100}%)`);
+  if (failCount > 0) {
+    const typeCounts: Record<string, number> = {};
+    for (const r of results) {
+      if (r.failureType) {
+        typeCounts[r.failureType] = (typeCounts[r.failureType] || 0) + 1;
+      }
+    }
+    console.log('Failure breakdown:');
+    for (const [type, count] of Object.entries(typeCounts).sort()) {
+      console.log(`  ${type}: ${count}`);
+    }
+  }
+  console.log('');
 });
