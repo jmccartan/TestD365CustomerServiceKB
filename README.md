@@ -103,7 +103,7 @@ The script will exit with a clear message:
   └──────────────────────────────────────────────────────┘
 ```
 
-## Customising selectors
+## Customizing selectors
 
 The script includes default selectors for the D365 Copilot side-panel chat. If your environment differs, update the selectors in `tests/d365-copilot-test.spec.ts` — look for comments marked `// Update these selectors`.
 
